@@ -82,7 +82,8 @@ function createFirebaseStorageAdapter() {
         if (value != null) return { value };
 
         // ゲストだけは端末の記録を使う。Googleログイン後にゲストデータを混ぜない。
-        return user.isAnonymous ? localStorageAdapter.get(key) : null;
+        // nb.auth は画面遷移のためのログイン状態だけで、記録データではない。
+        return (user.isAnonymous || key === "nb.auth") ? localStorageAdapter.get(key) : null;
       } catch (_) {
         return localStorageAdapter.get(key);
       }

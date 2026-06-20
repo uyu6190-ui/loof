@@ -256,6 +256,8 @@ export default function App() {
       const nextAuth = { mode: "google", at: Date.now() };
       // 既存の Google アカウントに切り替えた場合は、同アカウントのクラウド記録を読み直す。
       if (result.switchedUser) {
+        // 記録ではなくログイン済み画面を表示するための状態だけを残す。
+        window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));
         window.location.reload();
         return;
       }
