@@ -221,20 +221,20 @@ export default function App() {
   const [icloud, setIcloud] = usePersisted("nb.icloud", false);
   const [aboutBack, setAboutBack] = useState("accounts");
   const openAbout = (from) => { setAboutBack(from); setView("about"); };
-  const [auth, setAuth, authLoaded] = usePersisted("nb.auth", null);
+  const [auth, setAuth] = usePersisted("nb.auth", null);
   const [firebaseUser, setFirebaseUser] = useState(undefined);
   const [authBusy, setAuthBusy] = useState(false);
 
   useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
   useEffect(() => {
-    if (!authLoaded || !firebaseUser) return;
+    if (!firebaseUser) return;
     // Googleの認証状態を正とし、端末に残った過去のログイン状態は引き継がない。
     if (isGoogleUser(firebaseUser) && auth?.mode !== "google") {
       setAuth({ mode: "google", at: Date.now() });
     } else if (!isGoogleUser(firebaseUser) && auth?.mode === "google") {
       setAuth(null);
     }
-  }, [authLoaded, firebaseUser, auth, setAuth]);
+  }, [firebaseUser, auth, setAuth]);
 
   const beginGuest = async () => {
     setAuthBusy(true);
@@ -306,8 +306,10 @@ export default function App() {
 
   const editing = editId ? entries.find(e => e.id === editId) : null;
 
-  // 認証状態の取得が遅延しても、ログイン画面を先に出して白画面にしない。
-  if (!auth) return (
+  // Firestoreの読み込み完了ではなく、Firebase Authenticationの実際の状態で判断する。
+  const loggedInWithGoogle = isGoogleUser(firebaseUser);
+  const usingGuestMode = firebaseUser?.isAnonymous && auth?.mode === "guest";
+  if (!loggedInWithGoogle && !usingGuestMode) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />

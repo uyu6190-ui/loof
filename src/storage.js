@@ -23,6 +23,10 @@ function storageDocument(userId, key) {
   return doc(db, "users", userId, "storage", key);
 }
 
+function cloudCacheKey(userId, key) {
+  return `loof.cloud.${userId}.${key}`;
+}
+
 async function readFirebaseValue(userId, key) {
   const target = storageDocument(userId, key);
   const metadata = await getDoc(target);
@@ -78,8 +82,15 @@ function createFirebaseStorageAdapter() {
     async get(key) {
       try {
         const user = await getFirebaseUser();
+        if (!user.isAnonymous) {
+          const cached = window.localStorage.getItem(cloudCacheKey(user.uid, key));
+          if (cached != null) return { value: cached };
+        }
         const value = await readFirebaseValue(user.uid, key);
-        if (value != null) return { value };
+        if (value != null) {
+          if (!user.isAnonymous) window.localStorage.setItem(cloudCacheKey(user.uid, key), value);
+          return { value };
+        }
 
         // ゲストだけは端末の記録を使う。Googleログイン後にゲストデータを混ぜない。
         // nb.auth は画面遷移のためのログイン状態だけで、記録データではない。
@@ -92,6 +103,7 @@ function createFirebaseStorageAdapter() {
       await localStorageAdapter.set(key, value);
       try {
         const user = await getFirebaseUser();
+        if (!user.isAnonymous) window.localStorage.setItem(cloudCacheKey(user.uid, key), value);
         await writeFirebaseValue(user.uid, key, value);
       } catch (_) {
       // Firebase Console の初期設定前も、ゲスト利用は端末保存で使い続けられる。
@@ -99,6 +111,10 @@ function createFirebaseStorageAdapter() {
     },
     async delete(key) {
       await localStorageAdapter.delete(key);
+      try {
+        const user = await getFirebaseUser();
+        if (!user.isAnonymous) window.localStorage.removeItem(cloudCacheKey(user.uid, key));
+      } catch (_) {}
     }
   };
 }

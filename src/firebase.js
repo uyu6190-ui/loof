@@ -1,11 +1,13 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
+  browserLocalPersistence,
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
   signInAnonymously,
   signInWithPopup,
   signOut,
+  setPersistence,
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
@@ -24,9 +26,11 @@ const firebaseConfig = {
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+// Googleログイン状態を、このブラウザ・このドメインに明示的に永続化する。
+const authPersistenceReady = setPersistence(auth, browserLocalPersistence).catch(() => undefined);
 
 // 認証SDKがネットワーク待ちになってもアプリ全体を停止させない。
-const initialAuthState = new Promise((resolve) => {
+const initialAuthState = authPersistenceReady.then(() => new Promise((resolve) => {
   let settled = false;
   let unsubscribe;
   let timer;
@@ -43,7 +47,7 @@ const initialAuthState = new Promise((resolve) => {
     clearTimeout(timer);
     unsubscribe();
   }
-});
+}));
 
 function withTimeout(promise, milliseconds = 8_000) {
   return new Promise((resolve, reject) => {
@@ -71,7 +75,15 @@ export async function getFirebaseUser() {
 }
 
 export function subscribeToFirebaseUser(callback) {
-  return onAuthStateChanged(auth, callback);
+  let stopped = false;
+  let unsubscribe;
+  authPersistenceReady.then(() => {
+    if (!stopped) unsubscribe = onAuthStateChanged(auth, callback);
+  });
+  return () => {
+    stopped = true;
+    unsubscribe?.();
+  };
 }
 
 export function isGoogleUser(user) {
