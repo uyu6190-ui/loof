@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { getFirebaseUser, isGoogleUser, signInWithGoogle, signOutFirebaseUser, subscribeToFirebaseUser } from "./firebase.js";
 
 /* ============================================================
    Myposts — 書いて、貼って、読み返す。
@@ -221,6 +222,65 @@ export default function App() {
   const [aboutBack, setAboutBack] = useState("accounts");
   const openAbout = (from) => { setAboutBack(from); setView("about"); };
   const [auth, setAuth, authLoaded] = usePersisted("nb.auth", null);
+  const [firebaseUser, setFirebaseUser] = useState(undefined);
+  const [authBusy, setAuthBusy] = useState(false);
+
+  useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
+  useEffect(() => {
+    // 旧バージョンが保存したダミーの Google ログイン状態を正しい状態へ戻す。
+    if (authLoaded && firebaseUser && auth?.mode === "google" && !isGoogleUser(firebaseUser)) {
+      setAuth(null);
+    }
+  }, [authLoaded, firebaseUser, auth, setAuth]);
+
+  const beginGuest = async () => {
+    setAuthBusy(true);
+    try {
+      await getFirebaseUser();
+      setAuth({ mode: "guest", at: Date.now() });
+    } catch (_) {
+      await askAlert("Firebase へ接続できませんでした。設定を確認してもう一度お試しください。");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const beginGoogle = async () => {
+    setAuthBusy(true);
+    try {
+      const result = await signInWithGoogle();
+      const nextAuth = { mode: "google", at: Date.now() };
+      // 既存の Google アカウントに切り替えた場合は、同アカウントのクラウド記録を読み直す。
+      if (result.switchedUser) {
+        window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));
+        window.location.reload();
+        return;
+      }
+      setAuth(nextAuth);
+    } catch (error) {
+      if (error.code !== "auth/popup-closed-by-user") {
+        const detail = error.code === "auth/unauthorized-domain"
+          ? "Firebase Console の Authentication で、この Vercel ドメインを承認済みドメインに追加してください。"
+          : "Google ログインに失敗しました。Firebase の Google ログイン設定を確認して、もう一度お試しください。";
+        await askAlert(detail);
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    setAuthBusy(true);
+    try {
+      await signOutFirebaseUser();
+      setAuth(null);
+      setView("timeline");
+    } catch (_) {
+      await askAlert("ログアウトできませんでした。もう一度お試しください。");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   const realFirst = () => accounts.find(a => !a.isAll) || account;
   const startCompose = () => { setEditId(null); setDraft(account?.isAll ? newEntry(realFirst().id) : null); setView("compose"); };
@@ -241,14 +301,15 @@ export default function App() {
 
   const editing = editId ? entries.find(e => e.id === editId) : null;
 
-  if (!authLoaded) return <div style={S.root}><style>{CSS}</style><ConfirmHost /></div>;
+  if (!authLoaded || firebaseUser === undefined) return <div style={S.root}><style>{CSS}</style><ConfirmHost /></div>;
   if (!auth) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />
       <Login
-        onGoogle={() => setAuth({ mode: "google", at: Date.now() })}
-        onGuest={() => setAuth({ mode: "guest", at: Date.now() })}
+        onGoogle={beginGoogle}
+        onGuest={beginGuest}
+        busy={authBusy}
       />
     </div>
   );
@@ -304,7 +365,7 @@ export default function App() {
       )}
 
       {view === "about" && (
-        <About icloud={icloud} setIcloud={setIcloud} auth={auth} onLogout={() => { setAuth(null); setView("timeline"); }} onClose={() => setView(aboutBack)} />
+        <About icloud={icloud} setIcloud={setIcloud} user={firebaseUser} onGoogle={beginGoogle} onLogout={logout} busy={authBusy} onClose={() => setView(aboutBack)} />
       )}
 
       {view === "profile" && (
@@ -1127,14 +1188,15 @@ function DayView({ date, accounts, entries, currentId, onOpenEntry, onPatch, onP
 /* ============================================================
    ABOUT Myposts
    ============================================================ */
-function About({ icloud, setIcloud, auth, onLogout, onClose }) {
+function About({ icloud, setIcloud, user, onGoogle, onLogout, busy, onClose }) {
   const openX = () => window.open("https://x.com/inuteddy12", "_blank");
   const openReview = () => window.open("https://apps.apple.com/", "_blank");
   const toggleIcloud = async () => {
     if (!icloud) { setIcloud(true); await askAlert("iCloud同期をオンにしました。\n※ 実機アプリ版で端末間の同期が有効になります（現在のWeb版は端末内に保存されます）。"); }
     else setIcloud(false);
   };
-  const doLogout = async () => { if (await askConfirm("ログアウトしますか？\n（記録は端末に残ります）", { okText: "ログアウト" })) onLogout?.(); };
+  const google = isGoogleUser(user);
+  const doLogout = async () => { if (await askConfirm("ログアウトしますか？\n（記録は Google アカウントに安全に保存されています）", { okText: "ログアウト" })) onLogout?.(); };
   return (
     <div className="screen">
       <header className="topbar">
@@ -1166,8 +1228,8 @@ function About({ icloud, setIcloud, auth, onLogout, onClose }) {
 
         <div className="aboutSection">アカウント</div>
         <div className="aboutRow static">
-          <span className="aboutRowMain"><span className="aboutRowT">{auth?.mode === "google" ? "Googleでログイン中" : "ログインせず使用中"}</span><span className="aboutRowSub">{auth?.mode === "google" ? "Firebase連携は後日追加されます" : "ログインすると端末間で同期できます（準備中）"}</span></span>
-          <button className="miniToggle" onClick={doLogout}>{auth?.mode === "google" ? "ログアウト" : "ログイン"}</button>
+          <span className="aboutRowMain"><span className="aboutRowT">{google ? "Googleでログイン中" : "ログインせず使用中"}</span><span className="aboutRowSub">{google ? (user?.email || "Firebase で同期中") : "Googleでログインすると端末間で同期できます"}</span></span>
+          <button className="miniToggle" disabled={busy} onClick={google ? doLogout : onGoogle}>{google ? "ログアウト" : "Googleでログイン"}</button>
         </div>
 
         <button className="aboutCredit" onClick={openX}>created by inu teddy ↗</button>
@@ -1211,7 +1273,7 @@ function Sidebar({ entries, allEntries, onOpenEntry }) {
 }
 
 /* ============================================================
-   LOGIN (placeholder — Firebase will be wired later)
+   LOGIN
    ============================================================ */
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -1221,17 +1283,17 @@ const GoogleG = () => (
     <path fill="#34A853" d="M24 48c6.3 0 11.6-2.1 15.5-5.7l-7.1-5.5c-2 1.3-4.6 2.1-8.4 2.1-6.4 0-11.8-3.7-13.6-9.1l-7.9 6.1C6.4 42.6 14.6 48 24 48z" />
   </svg>
 );
-function Login({ onGoogle, onGuest }) {
+function Login({ onGoogle, onGuest, busy }) {
   return (
     <div className="login">
       <div className="loginInner">
         <div className="loginBrand">Myposts</div>
         <div className="loginTag">書いて、貼って、読み返す。</div>
         <div className="loginBtns">
-          <button className="googleBtn" onClick={onGoogle}><GoogleG /> Google でログイン</button>
-          <button className="guestBtn" onClick={onGuest}>ログインせず使用する</button>
+          <button className="googleBtn" disabled={busy} onClick={onGoogle}><GoogleG /> {busy ? "ログイン中…" : "Google でログイン"}</button>
+          <button className="guestBtn" disabled={busy} onClick={onGuest}>ログインせず使用する</button>
         </div>
-        <div className="loginNote">ログインすると、後日この端末以外でも記録を同期できるようになります（準備中）。</div>
+        <div className="loginNote">Google でログインすると、記録を複数の端末で安全に同期できます。</div>
       </div>
     </div>
   );
@@ -1545,6 +1607,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 .googleBtn:active{background:${LINE2};}
 .guestBtn{width:100%;background:${INK};color:#fff;border:none;border-radius:999px;padding:15px;font-size:15px;font-weight:700;}
 .guestBtn:active{opacity:.88;}
+.googleBtn:disabled,.guestBtn:disabled,.miniToggle:disabled{cursor:wait;opacity:.6;}
 .loginNote{font-size:11.5px;color:${FAINT};line-height:1.8;margin-top:22px;}
 
 /* topbar avatar button */

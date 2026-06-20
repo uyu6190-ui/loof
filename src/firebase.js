@@ -1,5 +1,13 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
-import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  linkWithPopup,
+  onAuthStateChanged,
+  signInAnonymously,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 // Firebase の Web 設定値は公開して利用する識別子です。アクセスの保護は
@@ -28,17 +36,49 @@ const initialAuthState = new Promise((resolve) => {
 let signInPromise;
 
 export async function getFirebaseUser() {
-  const currentUser = await initialAuthState;
-  if (currentUser) return currentUser;
+  await initialAuthState;
+  if (auth.currentUser) return auth.currentUser;
 
   if (!signInPromise) {
     signInPromise = signInAnonymously(auth)
       .then(({ user }) => user)
-      .catch((error) => {
-        signInPromise = undefined;
-        throw error;
-      });
+      .finally(() => { signInPromise = undefined; });
   }
 
   return signInPromise;
+}
+
+export function subscribeToFirebaseUser(callback) {
+  return onAuthStateChanged(auth, callback);
+}
+
+export function isGoogleUser(user) {
+  return !!user?.providerData?.some((provider) => provider.providerId === "google.com");
+}
+
+// 匿名アカウントへ Google をリンクすれば、Firestore の users/{uid} を移動せずに
+// そのまま恒久アカウントへ昇格できる。
+export async function signInWithGoogle() {
+  const provider = new GoogleAuthProvider();
+  auth.useDeviceLanguage();
+  const currentUser = await getFirebaseUser();
+
+  if (currentUser.isAnonymous) {
+    try {
+      const result = await linkWithPopup(currentUser, provider);
+      return { user: result.user, switchedUser: false };
+    } catch (error) {
+      // すでに別の端末で使われている Google アカウントなら、その既存アカウントで入る。
+      if (error.code !== "auth/credential-already-in-use") throw error;
+    }
+  }
+
+  const previousUid = auth.currentUser?.uid;
+  const result = await signInWithPopup(auth, provider);
+  return { user: result.user, switchedUser: result.user.uid !== previousUid };
+}
+
+export async function signOutFirebaseUser() {
+  await signOut(auth);
+  return getFirebaseUser();
 }
