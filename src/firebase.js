@@ -1,10 +1,13 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
+  linkWithRedirect,
   linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
+  signInWithRedirect,
   signInWithPopup,
   signOut,
 } from "firebase/auth";
@@ -57,6 +60,26 @@ function withTimeout(promise, milliseconds = 8_000) {
 }
 
 let signInPromise;
+const GOOGLE_REDIRECT_FLOW = "loof.google-redirect-flow";
+
+function shouldUseRedirect() {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+
+function saveRedirectFlow(flow) {
+  try { window.sessionStorage.setItem(GOOGLE_REDIRECT_FLOW, flow); } catch (_) {}
+}
+
+function takeRedirectFlow() {
+  try {
+    const flow = window.sessionStorage.getItem(GOOGLE_REDIRECT_FLOW);
+    window.sessionStorage.removeItem(GOOGLE_REDIRECT_FLOW);
+    return flow;
+  } catch (_) {
+    return null;
+  }
+}
 
 export async function getFirebaseUser() {
   await initialAuthState;
@@ -86,6 +109,19 @@ export async function signInWithGoogle() {
   auth.useDeviceLanguage();
   const currentUser = await getFirebaseUser();
 
+  // Firebase はモバイルWebではリダイレクト方式を推奨している。ポップアップが
+  // ブロックされるSafari/Chromeでも、この方式ならログインできる。
+  if (shouldUseRedirect()) {
+    if (currentUser.isAnonymous) {
+      saveRedirectFlow("link");
+      await linkWithRedirect(currentUser, provider);
+    } else {
+      saveRedirectFlow("sign-in");
+      await signInWithRedirect(auth, provider);
+    }
+    return { redirecting: true };
+  }
+
   if (currentUser.isAnonymous) {
     try {
       const result = await linkWithPopup(currentUser, provider);
@@ -99,6 +135,24 @@ export async function signInWithGoogle() {
   const previousUid = auth.currentUser?.uid;
   const result = await signInWithPopup(auth, provider);
   return { user: result.user, switchedUser: result.user.uid !== previousUid };
+}
+
+// リダイレクトでアプリへ戻った直後に必ず呼び出す。すでに使われているGoogle
+// アカウントだった場合は、リンクではなく通常ログインへ自動的に切り替える。
+export async function getGoogleRedirectResult() {
+  try {
+    const result = await getRedirectResult(auth);
+    takeRedirectFlow();
+    return result ? { user: result.user } : null;
+  } catch (error) {
+    const flow = takeRedirectFlow();
+    if (flow === "link" && error.code === "auth/credential-already-in-use") {
+      saveRedirectFlow("sign-in");
+      await signInWithRedirect(auth, new GoogleAuthProvider());
+      return { redirecting: true };
+    }
+    throw error;
+  }
 }
 
 export async function signOutFirebaseUser() {
