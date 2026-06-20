@@ -1,6 +1,6 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { collection, doc, getDoc, getDocs, onSnapshot, setDoc, writeBatch } from "firebase/firestore";
-import { db, getFirebaseUser } from "./firebase.js";
+import { auth, db, getFirebaseUser } from "./firebase.js";
 
 const localStorageAdapter = {
   async get(key) {
@@ -18,6 +18,12 @@ const localStorageAdapter = {
 const LoofCloud = registerPlugin("LoofCloud");
 
 const CHUNK_SIZE = 700_000;
+
+function reportSync(status, error) {
+  window.dispatchEvent(new CustomEvent("loof:sync-status", {
+    detail: { status, message: error?.message || "" }
+  }));
+}
 
 function storageDocument(userId, key) {
   return doc(db, "users", userId, "storage", key);
@@ -97,14 +103,17 @@ function createFirebaseStorageAdapter() {
         if (window.localStorage.getItem(cacheKey) === value) return;
         window.localStorage.setItem(cacheKey, value);
         notify(key, value);
-      } catch (_) {}
-    }));
+        reportSync("connected");
+      } catch (error) {
+        reportSync("error", error);
+      }
+    }, (error) => reportSync("error", error)));
   };
 
   return {
     async get(key) {
+      const user = await getFirebaseUser();
       try {
-        const user = await getFirebaseUser();
         if (!user.isAnonymous) {
           watch(user, key);
           const cached = window.localStorage.getItem(cloudCacheKey(user.uid, key));
@@ -113,14 +122,17 @@ function createFirebaseStorageAdapter() {
         const value = await readFirebaseValue(user.uid, key);
         if (value != null) {
           if (!user.isAnonymous) window.localStorage.setItem(cloudCacheKey(user.uid, key), value);
+          if (!user.isAnonymous) reportSync("connected");
           return { value };
         }
 
         // ゲストだけは端末の記録を使う。Googleログイン後にゲストデータを混ぜない。
         // nb.auth は画面遷移のためのログイン状態だけで、記録データではない。
         return (user.isAnonymous || key === "nb.auth") ? localStorageAdapter.get(key) : null;
-      } catch (_) {
-        return localStorageAdapter.get(key);
+      } catch (error) {
+        if (user.isAnonymous) return localStorageAdapter.get(key);
+        reportSync("error", error);
+        throw error;
       }
     },
     async set(key, value) {
@@ -129,8 +141,9 @@ function createFirebaseStorageAdapter() {
         const user = await getFirebaseUser();
         if (!user.isAnonymous) window.localStorage.setItem(cloudCacheKey(user.uid, key), value);
         await writeFirebaseValue(user.uid, key, value);
-      } catch (_) {
-      // Firebase Console の初期設定前も、ゲスト利用は端末保存で使い続けられる。
+        if (!user.isAnonymous) reportSync("connected");
+      } catch (error) {
+        if (auth?.currentUser && !auth.currentUser.isAnonymous) reportSync("error", error);
       }
     },
     async delete(key) {

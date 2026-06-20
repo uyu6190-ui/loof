@@ -33,16 +33,21 @@ const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDA
 function usePersisted(key, init) {
   const [val, setVal] = useState(init);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(null);
   useEffect(() => {
     let alive = true;
     (async () => {
+      let failed = false;
       try {
         if (window.storage) {
           const r = await window.storage.get(key);
           if (alive && r?.value != null) setVal(JSON.parse(r.value));
         }
-      } catch (_) {}
-      if (alive) setLoaded(true);
+      } catch (error) {
+        failed = true;
+        if (alive) setError(error);
+      }
+      if (alive && !failed) setLoaded(true);
     })();
     return () => { alive = false; };
   }, [key]);
@@ -60,7 +65,7 @@ function usePersisted(key, init) {
       try { if (window.storage) await window.storage.set(key, JSON.stringify(val)); } catch (_) {}
     })();
   }, [key, val, loaded]);
-  return [val, setVal, loaded];
+  return [val, setVal, loaded, error];
 }
 
 /* ---------- date helpers ---------- */
@@ -182,8 +187,8 @@ const accLabel = (a) => (a?.name || "").trim() || ((a?.bio || "").split("\n")[0]
 
 /* ============================================================ */
 export default function App() {
-  const [accounts, setAccounts, accLoaded] = usePersisted("nb.accounts", []);
-  const [entries, setEntries] = usePersisted("nb.entries", []);
+  const [accounts, setAccounts, accLoaded, accountsError] = usePersisted("nb.accounts", []);
+  const [entries, setEntries, , entriesError] = usePersisted("nb.entries", []);
   const [currentId, setCurrentId] = usePersisted("nb.current", "");
 
   // seed default accounts on first run
@@ -232,8 +237,14 @@ export default function App() {
   const [auth, setAuth] = usePersisted("nb.auth", null);
   const [firebaseUser, setFirebaseUser] = useState(undefined);
   const [authBusy, setAuthBusy] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("loading");
 
   useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
+  useEffect(() => {
+    const onStatus = (event) => setSyncStatus(event.detail.status);
+    window.addEventListener("loof:sync-status", onStatus);
+    return () => window.removeEventListener("loof:sync-status", onStatus);
+  }, []);
   useEffect(() => {
     if (!firebaseUser) return;
     // Googleの認証状態を正とし、端末に残った過去のログイン状態は引き継がない。
@@ -329,12 +340,25 @@ export default function App() {
     </div>
   );
 
+  if (loggedInWithGoogle && (accountsError || entriesError || syncStatus === "error")) return (
+    <div style={S.root} className="root">
+      <style>{CSS}</style>
+      <ConfirmHost />
+      <div className="syncError">
+        <div className="syncErrorTitle">Firestore に接続できません</div>
+        <div className="syncErrorText">Firebase Consoleで Firestore Database とルールを確認してから、もう一度開いてください。</div>
+        <button className="primary" onClick={() => window.location.reload()}>再読み込み</button>
+      </div>
+    </div>
+  );
+
   if (!account) return <div style={S.root}><style>{CSS}</style><ConfirmHost /><div style={{padding:40,color:SUB}}>読み込み中…</div></div>;
 
   return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />
+      {loggedInWithGoogle && <div className="syncPill">{syncStatus === "connected" ? "☁ Firestore 同期中" : "☁ Firestore に接続中…"}</div>}
 
       <div className="mainCol">
       {view === "timeline" && (
@@ -1624,6 +1648,10 @@ input,textarea{font-family:inherit;font-weight:600;}
 .guestBtn:active{opacity:.88;}
 .googleBtn:disabled,.guestBtn:disabled,.miniToggle:disabled{cursor:wait;opacity:.6;}
 .loginNote{font-size:11.5px;color:${FAINT};line-height:1.8;margin-top:22px;}
+.syncPill{position:fixed;right:16px;bottom:16px;z-index:80;background:#18181B;color:#fff;border-radius:999px;padding:8px 12px;font-size:11px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.16);}
+.syncError{width:min(420px,calc(100% - 40px));margin:20vh auto 0;background:#fff;border:1px solid ${LINE};border-radius:20px;padding:26px;box-shadow:0 10px 30px rgba(0,0,0,.08);}
+.syncErrorTitle{font-size:18px;font-weight:800;color:${INK};}
+.syncErrorText{font-size:13px;line-height:1.8;color:${MUT};margin:10px 0 22px;}
 
 /* topbar avatar button */
 .avatarBtn{border:none;background:none;padding:0;border-radius:50%;display:grid;place-items:center;}
