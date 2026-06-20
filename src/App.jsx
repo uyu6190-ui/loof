@@ -239,7 +239,8 @@ export default function App() {
       await getFirebaseUser();
       setAuth({ mode: "guest", at: Date.now() });
     } catch (_) {
-      await askAlert("Firebase へ接続できませんでした。設定を確認してもう一度お試しください。");
+      // Firebase が一時的に利用できなくても、端末保存のノートとして開けるようにする。
+      setAuth({ mode: "guest", at: Date.now() });
     } finally {
       setAuthBusy(false);
     }
@@ -301,7 +302,7 @@ export default function App() {
 
   const editing = editId ? entries.find(e => e.id === editId) : null;
 
-  if (!authLoaded || firebaseUser === undefined) return <div style={S.root}><style>{CSS}</style><ConfirmHost /></div>;
+  // 認証状態の取得が遅延しても、ログイン画面を先に出して白画面にしない。
   if (!auth) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>

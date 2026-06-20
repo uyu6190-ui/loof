@@ -26,12 +26,35 @@ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
+// 認証SDKがネットワーク待ちになってもアプリ全体を停止させない。
 const initialAuthState = new Promise((resolve) => {
-  const unsubscribe = onAuthStateChanged(auth, (user) => {
-    unsubscribe();
+  let settled = false;
+  let unsubscribe;
+  let timer;
+  const finish = (user) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    unsubscribe?.();
     resolve(user);
-  });
+  };
+  timer = setTimeout(() => finish(auth.currentUser), 4_000);
+  unsubscribe = onAuthStateChanged(auth, finish);
+  if (settled) {
+    clearTimeout(timer);
+    unsubscribe();
+  }
 });
+
+function withTimeout(promise, milliseconds = 8_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Firebase authentication timed out")), milliseconds);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
 
 let signInPromise;
 
@@ -40,7 +63,7 @@ export async function getFirebaseUser() {
   if (auth.currentUser) return auth.currentUser;
 
   if (!signInPromise) {
-    signInPromise = signInAnonymously(auth)
+    signInPromise = withTimeout(signInAnonymously(auth))
       .then(({ user }) => user)
       .finally(() => { signInPromise = undefined; });
   }
