@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
-import { collection, doc, getDoc, getDocs, setDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, setDoc, writeBatch } from "firebase/firestore";
 import { db, getFirebaseUser } from "./firebase.js";
 
 const localStorageAdapter = {
@@ -24,7 +24,8 @@ function storageDocument(userId, key) {
 }
 
 function cloudCacheKey(userId, key) {
-  return `loof.cloud.${userId}.${key}`;
+  // v2: 旧キャッシュはクラウド更新を反映しなかったため利用しない。
+  return `loof.cloud.v2.${userId}.${key}`;
 }
 
 async function readFirebaseValue(userId, key) {
@@ -78,11 +79,34 @@ async function writeFirebaseValue(userId, key, value) {
 }
 
 function createFirebaseStorageAdapter() {
+  const listeners = new Map();
+  const watchers = new Map();
+  const notify = (key, value) => listeners.get(key)?.forEach((listener) => listener(value));
+
+  const watch = (user, key) => {
+    if (user.isAnonymous) return;
+    const id = `${user.uid}:${key}`;
+    if (watchers.has(id)) return;
+    const target = storageDocument(user.uid, key);
+    watchers.set(id, onSnapshot(target, async (snapshot) => {
+      if (!snapshot.exists()) return;
+      try {
+        const value = await readFirebaseValue(user.uid, key);
+        if (value == null) return;
+        const cacheKey = cloudCacheKey(user.uid, key);
+        if (window.localStorage.getItem(cacheKey) === value) return;
+        window.localStorage.setItem(cacheKey, value);
+        notify(key, value);
+      } catch (_) {}
+    }));
+  };
+
   return {
     async get(key) {
       try {
         const user = await getFirebaseUser();
         if (!user.isAnonymous) {
+          watch(user, key);
           const cached = window.localStorage.getItem(cloudCacheKey(user.uid, key));
           if (cached != null) return { value: cached };
         }
@@ -115,6 +139,15 @@ function createFirebaseStorageAdapter() {
         const user = await getFirebaseUser();
         if (!user.isAnonymous) window.localStorage.removeItem(cloudCacheKey(user.uid, key));
       } catch (_) {}
+    },
+    subscribe(key, listener) {
+      const set = listeners.get(key) || new Set();
+      set.add(listener);
+      listeners.set(key, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(key);
+      };
     }
   };
 }
@@ -152,6 +185,9 @@ async function createNativeStorageAdapter() {
       try {
         await LoofCloud.delete({ key });
       } catch (_) {}
+    },
+    subscribe() {
+      return () => {};
     }
   };
 }
@@ -173,6 +209,17 @@ if (typeof window !== "undefined" && !window.storage) {
     async delete(key) {
       const adapter = await adapterPromise;
       return adapter.delete(key);
+    },
+    subscribe(key, listener) {
+      let alive = true;
+      let unsubscribe = () => {};
+      adapterPromise.then((adapter) => {
+        if (alive && adapter.subscribe) unsubscribe = adapter.subscribe(key, listener);
+      });
+      return () => {
+        alive = false;
+        unsubscribe();
+      };
     }
   };
 }

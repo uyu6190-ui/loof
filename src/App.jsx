@@ -47,6 +47,14 @@ function usePersisted(key, init) {
     return () => { alive = false; };
   }, [key]);
   useEffect(() => {
+    if (!window.storage?.subscribe) return undefined;
+    return window.storage.subscribe(key, (value) => {
+      try {
+        setVal((previous) => JSON.stringify(previous) === value ? previous : JSON.parse(value));
+      } catch (_) {}
+    });
+  }, [key]);
+  useEffect(() => {
     if (!loaded) return;
     (async () => {
       try { if (window.storage) await window.storage.set(key, JSON.stringify(val)); } catch (_) {}
