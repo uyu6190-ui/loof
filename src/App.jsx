@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { getFirebaseUser, getGoogleRedirectResult, isGoogleUser, signInWithGoogle, signOutFirebaseUser, subscribeToFirebaseUser } from "./firebase.js";
+import { getFirebaseUser, isGoogleUser, signInWithGoogle, signOutFirebaseUser, subscribeToFirebaseUser } from "./firebase.js";
 
 /* ============================================================
    Myposts — 書いて、貼って、読み返す。
@@ -227,19 +227,6 @@ export default function App() {
 
   useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
   useEffect(() => {
-    let alive = true;
-    getGoogleRedirectResult()
-      .then((result) => {
-        if (alive && result?.user) setAuth({ mode: "google", at: Date.now() });
-      })
-      .catch(async (error) => {
-        if (alive && error.code !== "auth/popup-closed-by-user") {
-          await askAlert("Google ログインを完了できませんでした。もう一度お試しください。");
-        }
-      });
-    return () => { alive = false; };
-  }, [setAuth]);
-  useEffect(() => {
     // 旧バージョンが保存したダミーの Google ログイン状態を正しい状態へ戻す。
     if (authLoaded && firebaseUser && auth?.mode === "google" && !isGoogleUser(firebaseUser)) {
       setAuth(null);
@@ -264,11 +251,6 @@ export default function App() {
     try {
       const result = await signInWithGoogle();
       const nextAuth = { mode: "google", at: Date.now() };
-      if (result.redirecting) {
-        // リダイレクト後にもログイン画面へ戻らないよう、端末側にも状態を残す。
-        window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));
-        return;
-      }
       // 既存の Google アカウントに切り替えた場合は、同アカウントのクラウド記録を読み直す。
       if (result.switchedUser) {
         window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));

@@ -1,13 +1,10 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   getAuth,
-  getRedirectResult,
   GoogleAuthProvider,
-  linkWithRedirect,
   linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
-  signInWithRedirect,
   signInWithPopup,
   signOut,
 } from "firebase/auth";
@@ -17,10 +14,7 @@ import { getFirestore } from "firebase/firestore";
 // Firestore Security Rules と Firebase Authentication で行います。
 const firebaseConfig = {
   apiKey: "AIzaSyC7pDhyPi0Gfc_BBKjsFbLRZXELbYs5X1g",
-  // Vercel 側で /__/auth と /__/firebase を Firebase Hosting へリバースプロキシする。
-  // 認証ヘルパーをアプリと同じオリジンに置くことで、モバイルSafari/Chromeの
-  // サードパーティストレージ制限下でも redirect ログインを維持できる。
-  authDomain: "loof-tau.vercel.app",
+  authDomain: "myposts-64092.firebaseapp.com",
   projectId: "myposts-64092",
   storageBucket: "myposts-64092.firebasestorage.app",
   messagingSenderId: "799369413079",
@@ -63,26 +57,6 @@ function withTimeout(promise, milliseconds = 8_000) {
 }
 
 let signInPromise;
-const GOOGLE_REDIRECT_FLOW = "loof.google-redirect-flow";
-
-function shouldUseRedirect() {
-  if (typeof navigator === "undefined") return false;
-  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
-}
-
-function saveRedirectFlow(flow) {
-  try { window.sessionStorage.setItem(GOOGLE_REDIRECT_FLOW, flow); } catch (_) {}
-}
-
-function takeRedirectFlow() {
-  try {
-    const flow = window.sessionStorage.getItem(GOOGLE_REDIRECT_FLOW);
-    window.sessionStorage.removeItem(GOOGLE_REDIRECT_FLOW);
-    return flow;
-  } catch (_) {
-    return null;
-  }
-}
 
 export async function getFirebaseUser() {
   await initialAuthState;
@@ -107,55 +81,26 @@ export function isGoogleUser(user) {
 
 // 匿名アカウントへ Google をリンクすれば、Firestore の users/{uid} を移動せずに
 // そのまま恒久アカウントへ昇格できる。
-export async function signInWithGoogle() {
+export function signInWithGoogle() {
   const provider = new GoogleAuthProvider();
   auth.useDeviceLanguage();
-  const currentUser = await getFirebaseUser();
+  const currentUser = auth.currentUser;
 
-  // Firebase はモバイルWebではリダイレクト方式を推奨している。ポップアップが
-  // ブロックされるSafari/Chromeでも、この方式ならログインできる。
-  if (shouldUseRedirect()) {
-    if (currentUser.isAnonymous) {
-      saveRedirectFlow("link");
-      await linkWithRedirect(currentUser, provider);
-    } else {
-      saveRedirectFlow("sign-in");
-      await signInWithRedirect(auth, provider);
-    }
-    return { redirecting: true };
+  // ボタン操作の同期中にポップアップを開く。事前に認証状態を await すると
+  // モバイルSafariがポップアップをブロックすることがある。
+  if (currentUser?.isAnonymous) {
+    return linkWithPopup(currentUser, provider)
+      .then(({ user }) => ({ user, switchedUser: false }))
+      .catch(async (error) => {
+        // すでに別の端末で使われている Google アカウントなら、その既存アカウントで入る。
+        if (error.code !== "auth/credential-already-in-use") throw error;
+        const result = await signInWithPopup(auth, provider);
+        return { user: result.user, switchedUser: result.user.uid !== currentUser.uid };
+      });
   }
 
-  if (currentUser.isAnonymous) {
-    try {
-      const result = await linkWithPopup(currentUser, provider);
-      return { user: result.user, switchedUser: false };
-    } catch (error) {
-      // すでに別の端末で使われている Google アカウントなら、その既存アカウントで入る。
-      if (error.code !== "auth/credential-already-in-use") throw error;
-    }
-  }
-
-  const previousUid = auth.currentUser?.uid;
-  const result = await signInWithPopup(auth, provider);
-  return { user: result.user, switchedUser: result.user.uid !== previousUid };
-}
-
-// リダイレクトでアプリへ戻った直後に必ず呼び出す。すでに使われているGoogle
-// アカウントだった場合は、リンクではなく通常ログインへ自動的に切り替える。
-export async function getGoogleRedirectResult() {
-  try {
-    const result = await getRedirectResult(auth);
-    takeRedirectFlow();
-    return result ? { user: result.user } : null;
-  } catch (error) {
-    const flow = takeRedirectFlow();
-    if (flow === "link" && error.code === "auth/credential-already-in-use") {
-      saveRedirectFlow("sign-in");
-      await signInWithRedirect(auth, new GoogleAuthProvider());
-      return { redirecting: true };
-    }
-    throw error;
-  }
+  return signInWithPopup(auth, provider)
+    .then(({ user }) => ({ user, switchedUser: user.uid !== currentUser?.uid }));
 }
 
 export async function signOutFirebaseUser() {
