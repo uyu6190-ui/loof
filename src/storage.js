@@ -36,6 +36,7 @@ async function readFirebaseValue(userId, key) {
   const snapshots = await getDocs(collection(target, "chunks"));
   const chunks = snapshots.docs
     .map((snapshot) => snapshot.data())
+    .filter((chunk) => chunk.index < data.chunkCount)
     .sort((a, b) => a.index - b.index)
     .map((chunk) => chunk.data);
   return chunks.join("");
@@ -57,6 +58,15 @@ async function writeFirebaseValue(userId, key, value) {
       const index = start + offset;
       batch.set(doc(target, "chunks", String(index).padStart(6, "0")), { index, data });
     });
+    await batch.commit();
+  }
+
+  // 以前より小さくなったデータの古いチャンクは、読み込み対象外にしつつ削除する。
+  const previousChunks = await getDocs(collection(target, "chunks"));
+  const stale = previousChunks.docs.filter((snapshot) => snapshot.data().index >= chunks.length);
+  for (let start = 0; start < stale.length; start += 400) {
+    const batch = writeBatch(db);
+    stale.slice(start, start + 400).forEach((snapshot) => batch.delete(snapshot.ref));
     await batch.commit();
   }
 

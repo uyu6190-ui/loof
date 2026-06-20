@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 /* ============================================================
-   loof — 書いて、貼って、読み返す。
+   Myposts — 書いて、貼って、読み返す。
    ・1日単位でまとまるスレッド型タイムライン
    ・本文の好きな位置に画像を差し込めるブロック式エディタ（Notion風）
    ・複数アカウント（テーマ）切り替えでジャンル分け（タグなし）
@@ -144,6 +144,8 @@ const askAlert = (message) => _ask ? _ask({ message, okOnly: true }) : Promise.r
 /* ---------- model ---------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const newAccount = (name) => ({ id: uid(), name, handle: "", icon: "", bio: "", cover: "", createdAt: new Date().toISOString() });
+const ALL_ID = "all";
+const makeAll = () => ({ id: ALL_ID, isAll: true, name: "", handle: "", icon: "", bio: "すべての記録", cover: "", createdAt: new Date().toISOString() });
 const blankBlocks = () => [{ id: uid(), type: "text", value: "" }];
 const newEntry = (accountId) => ({
   id: uid(), accountId, createdAt: new Date().toISOString(),
@@ -180,10 +182,15 @@ export default function App() {
     if (!accLoaded) return;
     if (accounts.length === 0) {
       const seeded = SEED_ACCOUNTS.map(s => ({ ...newAccount(s.name), bio: s.bio }));
-      setAccounts(seeded);
+      setAccounts([makeAll(), ...seeded]);
       setCurrentId(seeded[0].id);
-    } else if (!accounts.find(a => a.id === currentId)) {
-      setCurrentId(accounts[0].id);
+      return;
+    }
+    if (!accounts.find(a => a.isAll)) {
+      setAccounts(as => [makeAll(), ...as.filter(a => !a.isAll)]);
+    }
+    if (!accounts.find(a => a.id === currentId)) {
+      setCurrentId((accounts.find(a => !a.isAll) || accounts[0]).id);
     }
   }, [accLoaded]); // eslint-disable-line
 
@@ -192,8 +199,9 @@ export default function App() {
 
   const account = accounts.find(a => a.id === currentId) || null;
   const accEntries = useMemo(
-    () => entries.filter(e => e.accountId === currentId).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1),
-    [entries, currentId]
+    () => (account?.isAll ? [...entries] : entries.filter(e => e.accountId === currentId))
+      .sort((a, b) => a.createdAt < b.createdAt ? 1 : -1),
+    [entries, currentId, account]
   );
 
   const upsert = useCallback((entry) => {
@@ -212,12 +220,15 @@ export default function App() {
   const [icloud, setIcloud] = usePersisted("nb.icloud", false);
   const [aboutBack, setAboutBack] = useState("accounts");
   const openAbout = (from) => { setAboutBack(from); setView("about"); };
+  const [auth, setAuth, authLoaded] = usePersisted("nb.auth", null);
 
-  const startCompose = () => { setDraft(null); setEditId(null); setView("compose"); };
+  const realFirst = () => accounts.find(a => !a.isAll) || account;
+  const startCompose = () => { setEditId(null); setDraft(account?.isAll ? newEntry(realFirst().id) : null); setView("compose"); };
   const openEntry = (id) => { setDraft(null); setEditId(id); setView("compose"); };
   const quote = (entry) => {
     const acc = accounts.find(a => a.id === entry.accountId) || account;
-    setDraft({ ...newEntry(currentId), blocks: [{ id: uid(), type: "text", value: "" }, quoteBlockFrom(entry, acc)] });
+    const target = account?.isAll ? realFirst().id : currentId;
+    setDraft({ ...newEntry(target), blocks: [{ id: uid(), type: "text", value: "" }, quoteBlockFrom(entry, acc)] });
     setEditId(null); setView("compose");
   };
   const saveAccount = (acc) => setAccounts(as => as.map(a => a.id === acc.id ? { ...a, ...acc } : a));
@@ -230,16 +241,30 @@ export default function App() {
 
   const editing = editId ? entries.find(e => e.id === editId) : null;
 
+  if (!authLoaded) return <div style={S.root}><style>{CSS}</style><ConfirmHost /></div>;
+  if (!auth) return (
+    <div style={S.root} className="root">
+      <style>{CSS}</style>
+      <ConfirmHost />
+      <Login
+        onGoogle={() => setAuth({ mode: "google", at: Date.now() })}
+        onGuest={() => setAuth({ mode: "guest", at: Date.now() })}
+      />
+    </div>
+  );
+
   if (!account) return <div style={S.root}><style>{CSS}</style><ConfirmHost /><div style={{padding:40,color:SUB}}>読み込み中…</div></div>;
 
   return (
-    <div style={S.root}>
+    <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />
 
+      <div className="mainCol">
       {view === "timeline" && (
         <Timeline
           account={account}
+          accounts={accounts}
           entries={accEntries}
           onCompose={startCompose}
           onOpen={openEntry}
@@ -279,12 +304,13 @@ export default function App() {
       )}
 
       {view === "about" && (
-        <About icloud={icloud} setIcloud={setIcloud} onClose={() => setView(aboutBack)} />
+        <About icloud={icloud} setIcloud={setIcloud} auth={auth} onLogout={() => { setAuth(null); setView("timeline"); }} onClose={() => setView(aboutBack)} />
       )}
 
       {view === "profile" && (
         <Profile
           account={account}
+          accounts={accounts}
           entries={accEntries}
           onSave={saveAccount}
           onOpen={openEntry}
@@ -303,6 +329,9 @@ export default function App() {
           onClose={() => setView("timeline")}
         />
       )}
+      </div>
+
+      <Sidebar entries={account?.isAll ? entries : entries.filter(e => e.accountId === currentId)} allEntries={entries} onOpenEntry={openEntry} />
 
       {dayView && (
         <DayView
@@ -328,10 +357,11 @@ export default function App() {
 /* ============================================================
    TIMELINE — day-grouped thread
    ============================================================ */
-function Timeline({ account, entries, onCompose, onOpen, onPatch, onPostDelete, onQuote, onAddCommonplace, onSwitch, onProfile, onCommonplace, onCopyDay }) {
+function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPostDelete, onQuote, onAddCommonplace, onSwitch, onProfile, onCommonplace, onCopyDay }) {
   const [q, setQ] = useState("");
   const [jumpDate, setJumpDate] = useState(null);
   const dateRef = useRef(null);
+  const acctFor = e => account?.isAll ? (accounts.find(a => a.id === e.accountId) || account) : account;
   const filtered = useMemo(() => {
     if (!q.trim()) return entries;
     const k = q.trim().toLowerCase();
@@ -378,8 +408,10 @@ function Timeline({ account, entries, onCompose, onOpen, onPatch, onPostDelete, 
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="このノートを検索" />
           {q && <button className="clr" onClick={() => setQ("")}>✕</button>}
         </div>
-        <button className="dateBtn" onClick={() => { const el = dateRef.current; if (!el) return; el.showPicker ? el.showPicker() : el.click(); }} aria-label="日付で移動"><Cal /></button>
-        <input ref={dateRef} type="date" className="dateHidden" onChange={e => { if (e.target.value) setJumpDate({ date: e.target.value, n: Date.now() }); }} />
+        <label className="dateBtn" aria-label="日付で移動">
+          <Cal />
+          <input type="date" className="dateInput" onChange={e => { if (e.target.value) setJumpDate({ date: e.target.value, n: Date.now() }); }} />
+        </label>
       </div>
 
       {q.trim() ? (
@@ -396,7 +428,7 @@ function Timeline({ account, entries, onCompose, onOpen, onPatch, onPostDelete, 
                   <button className="dayCopy" onClick={() => onCopyDay(d.items)}>1日分をコピー</button>
                 </div>
                 <div className="thread">
-                  {d.items.map(e => <PostCard key={e.id} entry={e} account={account} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
+                  {d.items.map(e => <PostCard key={e.id} entry={e} account={acctFor(e)} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
                 </div>
               </section>
             ))}
@@ -410,7 +442,7 @@ function Timeline({ account, entries, onCompose, onOpen, onPatch, onPostDelete, 
           </div>
         </main>
       ) : (
-        <DayPager days={days} account={account} jumpDate={jumpDate} onOpen={onOpen} onCopyDay={onCopyDay} onPatch={onPatch} onPostDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />
+        <DayPager days={days} acctFor={acctFor} jumpDate={jumpDate} onOpen={onOpen} onCopyDay={onCopyDay} onPatch={onPatch} onPostDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />
       )}
 
       <button className="fab" onClick={onCompose} aria-label="書く"><Plus /></button>
@@ -419,7 +451,7 @@ function Timeline({ account, entries, onCompose, onOpen, onPatch, onPostDelete, 
 }
 
 /* ---------- swipeable day pager ---------- */
-function DayPager({ days, account, jumpDate, onOpen, onCopyDay, onPatch, onPostDelete, onQuote, onAddCommonplace }) {
+function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostDelete, onQuote, onAddCommonplace }) {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   const [index, setIndex] = useState(0);
@@ -492,7 +524,7 @@ function DayPager({ days, account, jumpDate, onOpen, onCopyDay, onPatch, onPostD
           <div className="page" key={d.date}>
             <div className="pageScroll">
               <div className="pageCopyRow"><button className="dayCopy" onClick={() => onCopyDay(d.items)}>この日をコピー</button></div>
-              {d.items.map(e => <PostCard key={e.id} entry={e} account={account} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
+              {d.items.map(e => <PostCard key={e.id} entry={e} account={acctFor(e)} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
               <div style={{ height: 110 }} />
             </div>
           </div>
@@ -721,10 +753,13 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
             <div className="grab" />
             <div className="sheetTitle">保存先のノート</div>
             <div className="sheetBody" style={{ paddingTop: 0 }}>
-              {accounts.map(a => (
+              {accounts.filter(a => !a.isAll).map(a => (
                 <button key={a.id} className={"pickRow" + (a.id === acctId ? " on" : "")} onClick={() => { setAcctId(a.id); setPickAcct(false); }}>
                   <Avatar account={a} size={42} />
-                  <span className="pickName">{a.name}</span>
+                  <span className="pickText">
+                    <span className="pickName">{accLabel(a)}</span>
+                    {a.bio && <span className="pickBio">{a.bio.split("\n")[0]}</span>}
+                  </span>
                   {a.id === acctId && <span className="pickCheck">✓</span>}
                 </button>
               ))}
@@ -775,8 +810,9 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
     setEditing(null);
   };
   const del = async (acc) => {
+    if (acc.isAll) { await askAlert("統合ノート（すべての記録）は削除できません。"); return; }
     const n = counts[acc.id] || 0;
-    if (accounts.length <= 1) { await askAlert("最後のノートは削除できません。"); return; }
+    if (accounts.filter(a => !a.isAll).length <= 1) { await askAlert("最後のノートは削除できません。"); return; }
     if (!(await askConfirm(`「${acc.name}」を削除しますか？${n > 0 ? `\nこのノートの記録 ${n} 件もすべて削除されます。` : ""}`, { danger: true, okText: "削除" }))) return;
     setEntries(es => es.filter(e => e.accountId !== acc.id));
     setAccounts(as => as.filter(a => a.id !== acc.id));
@@ -800,7 +836,8 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
               <Avatar account={a} size={44} />
               <span className="acctRowText">
                 <span className="acctRowName">{accLabel(a)}</span>
-                <span className="acctRowSub">{counts[a.id] || 0} 件{a.id === currentId ? " ・ 使用中" : ""}</span>
+                {a.bio && <span className="acctRowBio">{a.bio.split("\n")[0]}</span>}
+                <span className="acctRowSub">{(a.isAll ? entries.length : (counts[a.id] || 0))} 件{a.id === currentId ? " ・ 使用中" : ""}</span>
               </span>
             </button>
             <button className="iconBtn sm" onClick={() => setEditing(a)} aria-label="編集"><Pencil /></button>
@@ -810,7 +847,7 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
           <span className="addPlus"><Plus /></span> 新しいノートを作る
         </button>
 
-        <button className="aboutLink" onClick={onAbout}>about loof <span className="aboutChev">›</span></button>
+        <button className="aboutLink" onClick={onAbout}>about Myposts <span className="aboutChev">›</span></button>
       </main>
 
       {editing && (
@@ -818,7 +855,7 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
           account={editing}
           isNew={!!editing._new}
           onSave={save}
-          onDelete={editing._new ? null : () => del(editing)}
+          onDelete={(editing._new || editing.isAll) ? null : () => del(editing)}
           onClose={() => setEditing(null)}
         />
       )}
@@ -882,9 +919,10 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
 /* ============================================================
    PROFILE — X-style profile with bio (purpose) + cover
    ============================================================ */
-function Profile({ account, entries, onSave, onOpen, onAbout, onPatch, onPostDelete, onQuote, onAddCommonplace, onClose }) {
+function Profile({ account, accounts, entries, onSave, onOpen, onAbout, onPatch, onPostDelete, onQuote, onAddCommonplace, onClose }) {
   const [edit, setEdit] = useState(false);
   const j = new Date(account.createdAt);
+  const acctFor = e => account?.isAll ? ((accounts || []).find(a => a.id === e.accountId) || account) : account;
   return (
     <div className="screen">
       <header className="topbar profTop">
@@ -893,7 +931,7 @@ function Profile({ account, entries, onSave, onOpen, onAbout, onPatch, onPostDel
           <div className="profTopTitle">{accLabel(account)}</div>
           <div className="profTopSub">{entries.length} posts</div>
         </div>
-        <button className="iconBtn" onClick={onAbout} aria-label="about loof"><Info /></button>
+        <button className="iconBtn" onClick={onAbout} aria-label="about Myposts"><Info /></button>
       </header>
       <div className="profScroll">
         <div className="cover" style={account.cover ? { backgroundImage: `url(${account.cover})` } : null} />
@@ -911,7 +949,7 @@ function Profile({ account, entries, onSave, onOpen, onAbout, onPatch, onPostDel
         <div className="profPosts">
           {entries.length === 0
             ? <div className="empty">まだ投稿がありません。</div>
-            : entries.map(e => <PostCard key={e.id} entry={e} account={account} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
+            : entries.map(e => <PostCard key={e.id} entry={e} account={acctFor(e)} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
           <div style={{ height: 60 }} />
         </div>
       </div>
@@ -1069,7 +1107,7 @@ function DayView({ date, accounts, entries, currentId, onOpenEntry, onPatch, onP
         </header>
         <div className="scopeBar">
           <button className={"scopeChip" + (scope === "all" ? " on" : "")} onClick={() => setScope("all")}>すべてのノート</button>
-          {accounts.map(a => (
+          {accounts.filter(a => !a.isAll).map(a => (
             <button key={a.id} className={"scopeChip" + (scope === a.id ? " on" : "")} onClick={() => setScope(a.id)}>
               <Avatar account={a} size={18} /> {accLabel(a)}
             </button>
@@ -1087,24 +1125,25 @@ function DayView({ date, accounts, entries, currentId, onOpenEntry, onPatch, onP
 }
 
 /* ============================================================
-   ABOUT loof
+   ABOUT Myposts
    ============================================================ */
-function About({ icloud, setIcloud, onClose }) {
+function About({ icloud, setIcloud, auth, onLogout, onClose }) {
   const openX = () => window.open("https://x.com/inuteddy12", "_blank");
   const openReview = () => window.open("https://apps.apple.com/", "_blank");
   const toggleIcloud = async () => {
     if (!icloud) { setIcloud(true); await askAlert("iCloud同期をオンにしました。\n※ 実機アプリ版で端末間の同期が有効になります（現在のWeb版は端末内に保存されます）。"); }
     else setIcloud(false);
   };
+  const doLogout = async () => { if (await askConfirm("ログアウトしますか？\n（記録は端末に残ります）", { okText: "ログアウト" })) onLogout?.(); };
   return (
     <div className="screen">
       <header className="topbar">
         <button className="iconBtn" onClick={onClose}><Back /></button>
-        <span className="topTitle">about loof</span>
+        <span className="topTitle">about Myposts</span>
         <div style={{ width: 40 }} />
       </header>
       <div className="aboutScroll">
-        <div className="aboutBrand">loof</div>
+        <div className="aboutBrand">Myposts</div>
         <p className="aboutThanks">お使いいただきありがとうございます</p>
         <p className="aboutThanks sub">ご意見ご要望があれば教えてくださるとほんとうにうれしいです</p>
 
@@ -1125,8 +1164,74 @@ function About({ icloud, setIcloud, onClose }) {
         <div className="aboutSection">other apps</div>
         <div className="aboutPlaceholder">準備中です（後ほど紹介を追加します）</div>
 
+        <div className="aboutSection">アカウント</div>
+        <div className="aboutRow static">
+          <span className="aboutRowMain"><span className="aboutRowT">{auth?.mode === "google" ? "Googleでログイン中" : "ログインせず使用中"}</span><span className="aboutRowSub">{auth?.mode === "google" ? "Firebase連携は後日追加されます" : "ログインすると端末間で同期できます（準備中）"}</span></span>
+          <button className="miniToggle" onClick={doLogout}>{auth?.mode === "google" ? "ログアウト" : "ログイン"}</button>
+        </div>
+
         <button className="aboutCredit" onClick={openX}>created by inu teddy ↗</button>
         <div style={{ height: 40 }} />
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   SIDEBAR — wide screens only: search + image gallery
+   ============================================================ */
+function Sidebar({ entries, allEntries, onOpenEntry }) {
+  const [q, setQ] = useState("");
+  const imgs = useMemo(() => {
+    const k = q.trim().toLowerCase();
+    const out = [];
+    [...entries].sort((a, b) => a.createdAt < b.createdAt ? 1 : -1).forEach(e => {
+      if (k && !entryPlainText(e).toLowerCase().includes(k)) return;
+      e.blocks.filter(b => b.type === "image").forEach(b => out.push({ src: b.src, id: e.id }));
+    });
+    return out;
+  }, [entries, q]);
+  return (
+    <aside className="sidebar">
+      <div className="search sideSearch">
+        <SearchIcon />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="検索" />
+        {q && <button className="clr" onClick={() => setQ("")}>✕</button>}
+      </div>
+      <div className="sideCard">
+        <div className="sideTitle">これまでの画像</div>
+        {imgs.length === 0
+          ? <div className="sideEmpty">画像つきの記録がここに並びます。</div>
+          : <div className="imgGrid">{imgs.map((im, i) => (
+              <button key={i} className="imgCell" onClick={() => onOpenEntry(im.id)} style={{ backgroundImage: `url(${im.src})` }} aria-label="記録を開く" />
+            ))}</div>}
+      </div>
+    </aside>
+  );
+}
+
+/* ============================================================
+   LOGIN (placeholder — Firebase will be wired later)
+   ============================================================ */
+const GoogleG = () => (
+  <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.9 2.4 30.3 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.9 6.1C12.2 13.2 17.6 9.5 24 9.5z" />
+    <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.1 5.3-4.6 6.9l7.1 5.5c4.1-3.8 6.5-9.4 6.5-16.9z" />
+    <path fill="#FBBC05" d="M10.4 28.6c-.5-1.4-.8-2.9-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C.9 16.5 0 20.1 0 24s.9 7.5 2.5 10.7l7.9-6.1z" />
+    <path fill="#34A853" d="M24 48c6.3 0 11.6-2.1 15.5-5.7l-7.1-5.5c-2 1.3-4.6 2.1-8.4 2.1-6.4 0-11.8-3.7-13.6-9.1l-7.9 6.1C6.4 42.6 14.6 48 24 48z" />
+  </svg>
+);
+function Login({ onGoogle, onGuest }) {
+  return (
+    <div className="login">
+      <div className="loginInner">
+        <div className="loginBrand">Myposts</div>
+        <div className="loginTag">書いて、貼って、読み返す。</div>
+        <div className="loginBtns">
+          <button className="googleBtn" onClick={onGoogle}><GoogleG /> Google でログイン</button>
+          <button className="guestBtn" onClick={onGuest}>ログインせず使用する</button>
+        </div>
+        <div className="loginNote">ログインすると、後日この端末以外でも記録を同期できるようになります（準備中）。</div>
       </div>
     </div>
   );
@@ -1197,12 +1302,11 @@ const S = {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800;900&display=swap');
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-:root{--app-width:600px;--app-half:300px;--sheet-width:600px;--page-pad:16px;}
 body{margin:0;background:${BG};font-weight:600;}
 button{font-family:inherit;cursor:pointer;font-weight:600;}
 input,textarea{font-family:inherit;font-weight:600;}
 
-.screen{max-width:var(--app-width);margin:0 auto;min-height:100vh;position:relative;display:flex;flex-direction:column;background:#fff;}
+.screen{max-width:600px;margin:0 auto;min-height:100vh;position:relative;display:flex;flex-direction:column;background:#fff;}
 
 /* top bar */
 .topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
@@ -1223,13 +1327,13 @@ input,textarea{font-family:inherit;font-weight:600;}
 .avatar.mono{background:${INK};color:#fff;font-weight:600;border:none;font-family:'Hina Mincho',serif;}
 
 /* search */
-.searchWrap{padding:10px var(--page-pad) 4px;}
+.searchWrap{padding:10px 16px 4px;}
 .search{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid ${LINE};border-radius:13px;padding:9px 13px;}
 .search input{flex:1;border:none;outline:none;background:none;font-size:14px;color:${INK};}
 .search .clr{border:none;background:none;color:${FAINT};font-size:13px;}
 
 /* feed */
-.feed{flex:1;padding:8px var(--page-pad) 0;background:#fff;}
+.feed{flex:1;padding:8px 16px 0;background:#fff;}
 .day{margin-top:16px;}
 .dayHead{display:flex;align-items:flex-end;justify-content:space-between;
   padding:0 2px 12px;margin-bottom:6px;border-bottom:1px solid ${LINE};}
@@ -1311,7 +1415,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 .pgSub{font-size:10.5px;color:${MUT};margin-top:3px;font-weight:400;letter-spacing:.05em;}
 .track{flex:1;display:flex;min-height:0;touch-action:pan-y;will-change:transform;}
 .page{flex:0 0 100%;min-width:0;height:100%;overflow:hidden;}
-.pageScroll{height:100%;overflow-y:auto;padding:0 var(--page-pad);-webkit-overflow-scrolling:touch;}
+.pageScroll{height:100%;overflow-y:auto;padding:0 16px;-webkit-overflow-scrolling:touch;}
 .pageCopyRow{display:flex;justify-content:flex-end;padding:4px 0 2px;}
 .dots{display:flex;gap:7px;justify-content:center;align-items:center;padding:12px 0 16px;flex-wrap:wrap;}
 .dot{width:6px;height:6px;border-radius:50%;background:${LINE};}
@@ -1319,7 +1423,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 .dotCount{font-size:11px;color:${SUB};font-weight:700;}
 
 /* fab */
-.fab{position:fixed;right:max(20px,calc(50vw - var(--app-half) + 20px));bottom:26px;width:58px;height:58px;border-radius:50%;
+.fab{position:fixed;right:max(20px,calc(50vw - 300px + 20px));bottom:26px;width:58px;height:58px;border-radius:50%;
   background:${INK};color:#fff;border:none;display:grid;place-items:center;z-index:20;
   box-shadow:0 8px 24px rgba(0,0,0,.18);}
 .fab:active{transform:scale(.94);}
@@ -1336,6 +1440,9 @@ input,textarea{font-family:inherit;font-weight:600;}
 .pickRow:active{background:${LINE2};}
 .pickRow.on{background:${LINE2};}
 .pickName{flex:1;font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pickText{flex:1;min-width:0;display:flex;flex-direction:column;}
+.pickText .pickName{flex:none;}
+.pickBio{font-size:11.5px;color:${MUT};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}
 .pickCheck{color:${INK};font-weight:900;font-size:16px;}
 .pickHint{font-size:11.5px;color:${SUB};line-height:1.7;padding:12px 6px 4px;}
 .editor{flex:1;padding:18px 20px 0;}
@@ -1374,6 +1481,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 .acctMain{flex:1;display:flex;align-items:center;gap:14px;background:none;border:none;text-align:left;color:${INK};padding:8px 4px;}
 .acctRowText{display:flex;flex-direction:column;min-width:0;}
 .acctRowName{font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.acctRowBio{font-size:11.5px;color:${MUT};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}
 .acctRowSub{font-size:11.5px;color:${SUB};margin-top:3px;}
 .addAcct{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;
   background:none;border:1.5px dashed ${LINE};border-radius:18px;padding:18px;color:${SUB};font-size:14px;margin-top:6px;}
@@ -1384,7 +1492,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 .overlay{position:fixed;inset:0;z-index:60;background:rgba(20,20,24,.32);backdrop-filter:blur(3px);
   display:flex;align-items:flex-end;justify-content:center;animation:fade .2s ease;}
 @keyframes fade{from{opacity:0;}}
-.sheet{width:100%;max-width:var(--sheet-width);background:${PAPER};border-radius:26px 26px 0 0;padding-top:12px;
+.sheet{width:100%;max-width:600px;background:${PAPER};border-radius:26px 26px 0 0;padding-top:12px;
   animation:up .26s cubic-bezier(.2,.9,.3,1);max-height:90vh;overflow-y:auto;}
 @keyframes up{from{transform:translateY(100%);}}
 .grab{width:40px;height:4px;border-radius:2px;background:${FAINT};margin:0 auto 16px;}
@@ -1406,6 +1514,39 @@ input,textarea{font-family:inherit;font-weight:600;}
 
 @media (prefers-reduced-motion: reduce){*{animation:none!important;}}
 
+/* ===== wide / tablet-landscape layout ===== */
+.root{position:relative;}
+.mainCol{width:100%;}
+.sidebar{display:none;}
+@media (min-width:1000px){
+  .root{display:flex;justify-content:flex-start;align-items:flex-start;padding-left:clamp(16px,4vw,72px);gap:0;}
+  .mainCol{flex:0 0 600px;width:600px;border-left:1px solid ${LINE};border-right:1px solid ${LINE};min-height:100vh;position:relative;}
+  .screen{position:relative;}
+  .fab{position:absolute;right:22px;bottom:26px;}
+  .sidebar{display:block;flex:0 0 360px;width:360px;align-self:stretch;position:sticky;top:0;height:100vh;overflow-y:auto;padding:12px 18px 40px;}
+  .overlayInner,.sheet,.confirmBox{margin:0 auto;}
+}
+.sideSearch{margin:6px 0 16px;}
+.sideCard{background:#fff;border:1px solid ${LINE};border-radius:18px;padding:14px 14px 16px;}
+.sideTitle{font-size:13px;font-weight:800;color:${TXT};margin-bottom:12px;}
+.sideEmpty{font-size:12.5px;color:${FAINT};line-height:1.8;padding:18px 6px;text-align:center;}
+.imgGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
+.imgCell{aspect-ratio:1;border:none;border-radius:8px;background:#eee center/cover no-repeat;cursor:pointer;padding:0;}
+.imgCell:active{opacity:.8;}
+
+/* login */
+.login{min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;padding:28px;background:#fff;}
+.loginInner{width:100%;max-width:360px;text-align:center;}
+.loginBrand{font-size:44px;font-weight:900;letter-spacing:.01em;color:${INK};}
+.loginTag{font-size:13px;color:${MUT};margin-top:12px;letter-spacing:.06em;}
+.loginBtns{margin-top:48px;display:flex;flex-direction:column;gap:12px;}
+.googleBtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#fff;color:${TXT};
+  border:1px solid ${BRD2};border-radius:999px;padding:15px;font-size:15px;font-weight:700;}
+.googleBtn:active{background:${LINE2};}
+.guestBtn{width:100%;background:${INK};color:#fff;border:none;border-radius:999px;padding:15px;font-size:15px;font-weight:700;}
+.guestBtn:active{opacity:.88;}
+.loginNote{font-size:11.5px;color:${FAINT};line-height:1.8;margin-top:22px;}
+
 /* topbar avatar button */
 .avatarBtn{border:none;background:none;padding:0;border-radius:50%;display:grid;place-items:center;}
 .avatarBtn:active{opacity:.7;}
@@ -1414,7 +1555,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 /* timeline profile header (full, X-style) */
 .tlProfile{border-bottom:1px solid ${LINE};}
 .tlCover{height:96px;background:${BRD2} center/cover no-repeat;}
-.tlProfBody{padding:0 var(--page-pad) 12px;}
+.tlProfBody{padding:0 16px 12px;}
 .tlProfRow1{display:flex;justify-content:space-between;align-items:flex-end;margin-top:-34px;margin-bottom:8px;}
 .tlAvatarWrap{border:none;background:#fff;padding:0;border-radius:50%;border:4px solid #fff;line-height:0;}
 .tlAvatarWrap .avatar{width:66px;height:66px;}
@@ -1500,15 +1641,16 @@ input,textarea{font-family:inherit;font-weight:600;}
 /* date search */
 .searchWrap{display:flex;align-items:center;gap:8px;}
 .searchWrap .search{flex:1;}
-.dateBtn{flex-shrink:0;width:44px;height:42px;border:1px solid ${LINE};border-radius:13px;background:#fff;color:${INK};display:grid;place-items:center;}
+.dateBtn{position:relative;flex-shrink:0;width:44px;height:42px;border:1px solid ${LINE};border-radius:13px;background:#fff;color:${INK};display:grid;place-items:center;cursor:pointer;}
 .dateBtn:active{background:${LINE2};}
 .dateBtn svg{color:${INK};}
-.dateHidden{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
+.dateInput{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;padding:0;margin:0;cursor:pointer;}
+.dateInput::-webkit-calendar-picker-indicator{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
 .xTime.asLink{background:none;border:none;padding:0;color:${MUT};font-size:15px;font-weight:400;cursor:pointer;}
 .xTime.asLink:active{text-decoration:underline;color:${INK};}
 
 /* day view */
-.fullPane{width:100%;max-width:var(--app-width);background:#fff;display:flex;flex-direction:column;height:100vh;animation:up .26s cubic-bezier(.2,.9,.3,1);}
+.fullPane{width:100%;max-width:600px;background:#fff;display:flex;flex-direction:column;height:100vh;animation:up .26s cubic-bezier(.2,.9,.3,1);}
 .scopeBar{display:flex;gap:8px;overflow-x:auto;padding:10px 16px;border-bottom:1px solid ${LINE};-webkit-overflow-scrolling:touch;}
 .scopeBar::-webkit-scrollbar{display:none;}
 .scopeChip{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;border:1px solid ${LINE};background:#fff;color:${TXT};
@@ -1537,36 +1679,4 @@ input,textarea{font-family:inherit;font-weight:600;}
 .aboutCredit{display:block;margin:32px auto 0;background:none;border:none;color:${MUT};font-size:12px;letter-spacing:.1em;padding:10px;}
 .aboutLink{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;background:none;border:none;
   color:${MUT};font-size:13px;font-weight:700;padding:18px 0 6px;margin-top:6px;}
-
-@media (min-width: 768px){
-  :root{--app-width:840px;--app-half:420px;--sheet-width:720px;--page-pad:28px;}
-  body{background:${BG};}
-  .screen{min-height:100svh;border-left:1px solid ${LINE};border-right:1px solid ${LINE};}
-  .topbar{padding:14px 24px;min-height:64px;}
-  .tlCover{height:148px;}
-  .tlProfBody{padding-bottom:18px;}
-  .tlProfRow1{margin-top:-42px;}
-  .tlAvatarWrap .avatar{width:82px;height:82px;}
-  .tlProfName{font-size:20px;}
-  .tlProfBio{max-width:640px;font-size:15px;}
-  .searchWrap{padding-top:14px;padding-bottom:8px;}
-  .pagerHead{padding:12px 24px 16px;}
-  .pgBig{font-size:18px;}
-  .pgSub{font-size:12px;}
-  .xpost{padding:16px 28px 6px;gap:14px;}
-  .xActions{max-width:540px;}
-  .xImg,.qImg,.imgBlock img{max-width:620px;}
-  .feed .xImg,.pageScroll .xImg,.profPosts .xImg,.cpDetail .xImg,.dvScroll .xImg{max-width:620px;}
-  .editor{padding:24px 32px 0;}
-  .toolbar{padding:14px 28px;}
-  .acctList,.cpScroll,.cpDetail,.aboutScroll{padding-left:28px;padding-right:28px;}
-  .cover{height:190px;}
-  .profBody{padding-left:28px;padding-right:28px;}
-  .profAvatar .avatar{width:96px;height:96px;}
-  .profRow1{margin-top:-48px;}
-  .sheet{border-radius:28px 28px 0 0;}
-  .sheetBody{padding-left:32px;padding-right:32px;}
-  .fullPane{height:100svh;}
-  .scopeBar{padding-left:28px;padding-right:28px;}
-}
 `;
