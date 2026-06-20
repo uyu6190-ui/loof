@@ -81,10 +81,8 @@ function createFirebaseStorageAdapter() {
         const value = await readFirebaseValue(user.uid, key);
         if (value != null) return { value };
 
-        // 初回のみ、これまで端末に保存されていた記録を Firebase へ移す。
-        const local = await localStorageAdapter.get(key);
-        if (local?.value != null) await writeFirebaseValue(user.uid, key, local.value);
-        return local;
+        // ゲストだけは端末の記録を使う。Googleログイン後にゲストデータを混ぜない。
+        return user.isAnonymous ? localStorageAdapter.get(key) : null;
       } catch (_) {
         return localStorageAdapter.get(key);
       }
@@ -95,7 +93,7 @@ function createFirebaseStorageAdapter() {
         const user = await getFirebaseUser();
         await writeFirebaseValue(user.uid, key, value);
       } catch (_) {
-        // Firebase Console の初期設定前も、アプリは端末保存で使い続けられる。
+      // Firebase Console の初期設定前も、ゲスト利用は端末保存で使い続けられる。
       }
     },
     async delete(key) {

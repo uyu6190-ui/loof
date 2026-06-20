@@ -227,8 +227,11 @@ export default function App() {
 
   useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
   useEffect(() => {
-    // 旧バージョンが保存したダミーの Google ログイン状態を正しい状態へ戻す。
-    if (authLoaded && firebaseUser && auth?.mode === "google" && !isGoogleUser(firebaseUser)) {
+    if (!authLoaded || !firebaseUser) return;
+    // Googleの認証状態を正とし、端末に残った過去のログイン状態は引き継がない。
+    if (isGoogleUser(firebaseUser) && auth?.mode !== "google") {
+      setAuth({ mode: "google", at: Date.now() });
+    } else if (!isGoogleUser(firebaseUser) && auth?.mode === "google") {
       setAuth(null);
     }
   }, [authLoaded, firebaseUser, auth, setAuth]);
@@ -253,7 +256,6 @@ export default function App() {
       const nextAuth = { mode: "google", at: Date.now() };
       // 既存の Google アカウントに切り替えた場合は、同アカウントのクラウド記録を読み直す。
       if (result.switchedUser) {
-        window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));
         window.location.reload();
         return;
       }

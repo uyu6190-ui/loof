@@ -2,7 +2,6 @@ import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
-  linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
   signInWithPopup,
@@ -79,8 +78,6 @@ export function isGoogleUser(user) {
   return !!user?.providerData?.some((provider) => provider.providerId === "google.com");
 }
 
-// 匿名アカウントへ Google をリンクすれば、Firestore の users/{uid} を移動せずに
-// そのまま恒久アカウントへ昇格できる。
 export function signInWithGoogle() {
   const provider = new GoogleAuthProvider();
   auth.useDeviceLanguage();
@@ -88,17 +85,7 @@ export function signInWithGoogle() {
 
   // ボタン操作の同期中にポップアップを開く。事前に認証状態を await すると
   // モバイルSafariがポップアップをブロックすることがある。
-  if (currentUser?.isAnonymous) {
-    return linkWithPopup(currentUser, provider)
-      .then(({ user }) => ({ user, switchedUser: false }))
-      .catch(async (error) => {
-        // すでに別の端末で使われている Google アカウントなら、その既存アカウントで入る。
-        if (error.code !== "auth/credential-already-in-use") throw error;
-        const result = await signInWithPopup(auth, provider);
-        return { user: result.user, switchedUser: result.user.uid !== currentUser.uid };
-      });
-  }
-
+  // ゲストのデータは Google アカウントへ移行せず、ログイン後はGoogle側の記録だけを使う。
   return signInWithPopup(auth, provider)
     .then(({ user }) => ({ user, switchedUser: user.uid !== currentUser?.uid }));
 }
