@@ -17,7 +17,10 @@ import { getFirestore } from "firebase/firestore";
 // Firestore Security Rules と Firebase Authentication で行います。
 const firebaseConfig = {
   apiKey: "AIzaSyC7pDhyPi0Gfc_BBKjsFbLRZXELbYs5X1g",
-  authDomain: "myposts-64092.firebaseapp.com",
+  // Vercel 側で /__/auth と /__/firebase を Firebase Hosting へリバースプロキシする。
+  // 認証ヘルパーをアプリと同じオリジンに置くことで、モバイルSafari/Chromeの
+  // サードパーティストレージ制限下でも redirect ログインを維持できる。
+  authDomain: "loof-tau.vercel.app",
   projectId: "myposts-64092",
   storageBucket: "myposts-64092.firebasestorage.app",
   messagingSenderId: "799369413079",

@@ -5,8 +5,9 @@
 1. **Authentication** → **Sign-in method** で「匿名」を有効化する。
 2. 同じ画面で「Google」を有効化し、サポート用メールアドレスを選んで保存する。
 3. **Authentication** → **Settings** → **Authorized domains** に `loof-tau.vercel.app` を追加する。独自ドメインを設定した場合は、そのドメインも追加する。
-4. **Firestore Database** を作成する（本番モードで可）。
-5. **Rules** に以下を貼り付けて公開する。
+4. Google Cloud Console の、このFirebaseプロジェクト用 OAuth 2.0 クライアントに、次の **Authorized redirect URI** を追加する：`https://loof-tau.vercel.app/__/auth/handler`。
+5. **Firestore Database** を作成する（本番モードで可）。
+6. **Rules** に以下を貼り付けて公開する。
 
 ```text
 rules_version = '2';
