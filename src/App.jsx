@@ -157,7 +157,7 @@ const askAlert = (message) => _ask ? _ask({ message, okOnly: true }) : Promise.r
 
 /* ---------- model ---------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const newAccount = (name) => ({ id: uid(), name, handle: "", icon: "", bio: "", cover: "", createdAt: new Date().toISOString() });
+const newAccount = (name) => ({ id: uid(), name, handle: "", icon: "", bio: "", cover: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 const ALL_ID = "all";
 const makeAll = () => ({ id: ALL_ID, isAll: true, name: "", handle: "", icon: "", bio: "すべての記録", cover: "", createdAt: new Date().toISOString() });
 const blankBlocks = () => [{ id: uid(), type: "text", value: "" }];
@@ -219,14 +219,19 @@ export default function App() {
   );
 
   const upsert = useCallback((entry) => {
+    const next = { ...entry, updatedAt: new Date().toISOString() };
     setEntries(es => {
-      const i = es.findIndex(e => e.id === entry.id);
-      if (i === -1) return [entry, ...es];
-      const copy = es.slice(); copy[i] = entry; return copy;
+      const i = es.findIndex(e => e.id === next.id);
+      if (i === -1) return [next, ...es];
+      const copy = es.slice(); copy[i] = next; return copy;
     });
   }, [setEntries]);
-  const remove = useCallback((id) => setEntries(es => es.filter(e => e.id !== id)), [setEntries]);
-  const patch = useCallback((id, p) => setEntries(es => es.map(e => e.id === id ? { ...e, ...p } : e)), [setEntries]);
+  const remove = useCallback((id) => {
+    // 配列の欠落を削除扱いにしない。明示した1件だけをFirestoreで tombstone 化する。
+    window.storage?.deleteItem?.("nb.entries", id).catch(() => {});
+    setEntries(es => es.filter(e => e.id !== id));
+  }, [setEntries]);
+  const patch = useCallback((id, p) => setEntries(es => es.map(e => e.id === id ? { ...e, ...p, updatedAt: new Date().toISOString() } : e)), [setEntries]);
   const [draft, setDraft] = useState(null);
   const [collections, setCollections] = usePersisted("nb.collections", []);
   const [cpFor, setCpFor] = useState(null); // entry to add to a commonplace
@@ -271,16 +276,11 @@ export default function App() {
   const beginGoogle = async () => {
     setAuthBusy(true);
     try {
-      const result = await signInWithGoogle();
+      await signInWithGoogle();
       const nextAuth = { mode: "google", at: Date.now() };
-      // 既存の Google アカウントに切り替えた場合は、同アカウントのクラウド記録を読み直す。
-      if (result.switchedUser) {
-        // 記録ではなくログイン済み画面を表示するための状態だけを残す。
-        window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));
-        window.location.reload();
-        return;
-      }
-      setAuth(nextAuth);
+      // ログイン前のPWA/ゲスト状態はGoogleの記録に混ぜず、必ずサーバー先読みの新セッションで開く。
+      window.localStorage.setItem("nb.auth", JSON.stringify(nextAuth));
+      window.location.reload();
     } catch (error) {
       if (error.code !== "auth/popup-closed-by-user") {
         const detail = error.code === "auth/unauthorized-domain"
@@ -315,11 +315,11 @@ export default function App() {
     setDraft({ ...newEntry(target), blocks: [{ id: uid(), type: "text", value: "" }, quoteBlockFrom(entry, acc)] });
     setEditId(null); setView("compose");
   };
-  const saveAccount = (acc) => setAccounts(as => as.map(a => a.id === acc.id ? { ...a, ...acc } : a));
+  const saveAccount = (acc) => setAccounts(as => as.map(a => a.id === acc.id ? { ...a, ...acc, updatedAt: new Date().toISOString() } : a));
   const addToCollection = (colId, entryId) =>
-    setCollections(cs => cs.map(c => c.id === colId ? { ...c, itemIds: [...new Set([...(c.itemIds || []), entryId])] } : c));
+    setCollections(cs => cs.map(c => c.id === colId ? { ...c, itemIds: [...new Set([...(c.itemIds || []), entryId])], updatedAt: new Date().toISOString() } : c));
   const createCollection = (name, query = "") => {
-    const c = { id: uid(), name: name.trim() || "コモンプレイス", query: query.trim(), itemIds: [], createdAt: new Date().toISOString() };
+    const c = { id: uid(), name: name.trim() || "コモンプレイス", query: query.trim(), itemIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     setCollections(cs => [c, ...cs]); return c;
   };
 
@@ -901,10 +901,11 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
   const pick = (id) => { setCurrentId(id); onClose(); };
 
   const save = (acc) => {
+    const next = { ...acc, updatedAt: new Date().toISOString() };
     setAccounts(as => {
-      const i = as.findIndex(a => a.id === acc.id);
-      if (i === -1) return [...as, acc];
-      const c = as.slice(); c[i] = acc; return c;
+      const i = as.findIndex(a => a.id === next.id);
+      if (i === -1) return [...as, next];
+      const c = as.slice(); c[i] = next; return c;
     });
     if (!accounts.find(a => a.id === acc.id)) setCurrentId(acc.id);
     setEditing(null);
@@ -914,6 +915,9 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
     const n = counts[acc.id] || 0;
     if (accounts.filter(a => !a.isAll).length <= 1) { await askAlert("最後のノートは削除できません。"); return; }
     if (!(await askConfirm(`「${acc.name}」を削除しますか？${n > 0 ? `\nこのノートの記録 ${n} 件もすべて削除されます。` : ""}`, { danger: true, okText: "削除" }))) return;
+    // 明示削除だけをtombstoneとして送る。配列全体を空/欠落で同期しない。
+    entries.filter(e => e.accountId === acc.id).forEach(e => window.storage?.deleteItem?.("nb.entries", e.id).catch(() => {}));
+    window.storage?.deleteItem?.("nb.accounts", acc.id).catch(() => {});
     setEntries(es => es.filter(e => e.accountId !== acc.id));
     setAccounts(as => as.filter(a => a.id !== acc.id));
     if (currentId === acc.id) setCurrentId(accounts.find(a => a.id !== acc.id).id);
@@ -1079,10 +1083,11 @@ function Commonplace({ accounts, entries, collections, setCollections, onCreate,
   };
   const delCollection = async (c) => {
     if (await askConfirm(`「${c.name}」を削除しますか？\n（記録そのものは消えません）`, { danger: true, okText: "削除" })) {
+      window.storage?.deleteItem?.("nb.collections", c.id).catch(() => {});
       setCollections(cs => cs.filter(x => x.id !== c.id)); setSel(null);
     }
   };
-  const removeItem = (c, id) => setCollections(cs => cs.map(x => x.id === c.id ? { ...x, itemIds: (x.itemIds || []).filter(i => i !== id) } : x));
+  const removeItem = (c, id) => setCollections(cs => cs.map(x => x.id === c.id ? { ...x, itemIds: (x.itemIds || []).filter(i => i !== id), updatedAt: new Date().toISOString() } : x));
 
   if (sel) {
     const c = collections.find(x => x.id === sel);
