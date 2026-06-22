@@ -1482,7 +1482,7 @@ body{margin:0;background:${BG};font-weight:600;}
 button{font-family:inherit;cursor:pointer;font-weight:600;}
 input,textarea{font-family:inherit;font-weight:600;}
 
-.screen{max-width:600px;margin:0 auto;min-height:100vh;position:relative;display:flex;flex-direction:column;background:#fff;}
+.screen{width:100%;max-width:none;margin:0;min-height:100vh;position:relative;display:flex;flex-direction:column;background:#fff;}
 
 /* top bar */
 .topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
