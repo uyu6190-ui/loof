@@ -1479,6 +1479,7 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800;900&display=swap');
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 body{margin:0;background:${BG};font-weight:600;}
+html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;}
 button{font-family:inherit;cursor:pointer;font-weight:600;}
 input,textarea{font-family:inherit;font-weight:600;}
 
@@ -1694,6 +1695,9 @@ input,textarea{font-family:inherit;font-weight:600;}
 .root{position:relative;}
 .mainCol{width:100%;}
 .sidebar{display:none;}
+@media (max-width:999px){
+  .root,.mainCol,.screen{width:100%!important;max-width:100%!important;min-width:0!important;margin:0!important;padding-left:0!important;padding-right:0!important;}
+}
 @media (min-width:1000px){
   .root{display:flex;justify-content:flex-start;align-items:flex-start;padding-left:clamp(16px,4vw,72px);gap:0;}
   .mainCol{flex:0 0 600px;width:600px;border-left:1px solid ${LINE};border-right:1px solid ${LINE};min-height:100vh;position:relative;}
