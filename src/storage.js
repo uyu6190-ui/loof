@@ -259,6 +259,7 @@ function createFirebaseStorageAdapter() {
   const listeners = new Map();
   const watchers = new Map();
   const known = new Map();
+  const refreshQueues = new Map();
   const notify = (key, value) => listeners.get(key)?.forEach(listener => listener(value));
   const knownFor = (userId, key) => {
     const id = `${userId}:${key}`;
@@ -266,20 +267,40 @@ function createFirebaseStorageAdapter() {
     return known.get(id);
   };
 
-  async function loadItemsFromServer(user, key) {
+  async function loadItemsFromServer(user, key, { initial = false } = {}) {
     const snapshots = await getDocsFromServer(collectionRef(user.uid, key));
-    const values = (await Promise.all(snapshots.docs.map(async snapshot => {
+    const incoming = await Promise.all(snapshots.docs.map(async snapshot => {
       const data = snapshot.data();
-      if (data.deletedAt) return null;
-      try { return await payloadFromSnapshot(snapshot); } catch (error) {
+      const version = Number(data.clientUpdatedAt || 0);
+      if (data.deletedAt) return { id: snapshot.id, version, deleted: true };
+      try {
+        const value = await payloadFromSnapshot(snapshot);
+        if (!value?.id) throw new Error("投稿データの形式が不正です");
+        return { id: snapshot.id, version, deleted: false, value, signature: stable(value) };
+      } catch (error) {
         syncLog("item-read-failed", { userId: user.uid, key, id: snapshot.id, message: error.message });
-        return null;
+        throw error;
       }
-    }))).filter(Boolean);
+    }));
     const map = knownFor(user.uid, key);
-    map.clear();
-    values.forEach(value => map.set(value.id, stable(value)));
-    return values;
+    if (initial) map.clear();
+    // 「今回の一覧に無い」ことは削除ではない。削除はdeletedAtを持つ当該ドキュメントだけで確定する。
+    incoming.forEach(record => {
+      const previous = map.get(record.id);
+      if (!previous || record.version >= previous.clientUpdatedAt) {
+        map.set(record.id, {
+          ...record,
+          clientUpdatedAt: record.version
+        });
+      } else {
+        syncLog("older-server-snapshot-ignored", {
+          userId: user.uid, key, id: record.id,
+          incomingClientUpdatedAt: record.version,
+          knownClientUpdatedAt: previous.clientUpdatedAt
+        });
+      }
+    });
+    return [...map.values()].filter(record => !record.deleted).map(record => record.value);
   }
 
   async function loadPreferenceFromServer(user, key) {
@@ -293,18 +314,22 @@ function createFirebaseStorageAdapter() {
     const target = DATA_KEYS[key] ? collectionRef(user.uid, key) : preferenceRef(user.uid, key);
     const unsubscribe = onSnapshot(target, { includeMetadataChanges: true }, async (snapshot) => {
       // PWAに残るFirestore IndexedDBキャッシュを正としない。サーバー確定のスナップショットだけ使う。
-      if (snapshot.metadata.fromCache) {
+      if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) {
         syncLog("cached-snapshot-ignored", { userId: user.uid, key });
         return;
       }
-      try {
+      // 連続するFirestore通知は順番に処理する。古い読み込みの完了が新しい結果を巻き戻さない。
+      const previousRefresh = refreshQueues.get(id) || Promise.resolve();
+      const refresh = previousRefresh.catch(() => {}).then(async () => {
         const value = DATA_KEYS[key]
           ? JSON.stringify(await loadItemsFromServer(user, key))
           : await loadPreferenceFromServer(user, key);
         if (value != null) notify(key, value);
         reportSync("connected");
         syncLog("server-snapshot-applied", { userId: user.uid, key });
-      } catch (error) {
+      });
+      refreshQueues.set(id, refresh);
+      try { await refresh; } catch (error) {
         reportSync("error", error);
         syncLog("server-snapshot-failed", { userId: user.uid, key, message: error.message });
       }
@@ -324,7 +349,7 @@ function createFirebaseStorageAdapter() {
         // 起動・再読み込みでは、必ずFirestoreサーバーを先に読む。端末キャッシュは復元元にしない。
         await migrateLegacyFirestore(user);
         const value = DATA_KEYS[key]
-          ? JSON.stringify(await loadItemsFromServer(user, key))
+          ? JSON.stringify(await loadItemsFromServer(user, key, { initial: true }))
           : await loadPreferenceFromServer(user, key);
         watch(user, key);
         reportSync("connected");
@@ -356,9 +381,15 @@ function createFirebaseStorageAdapter() {
       }
       const map = knownFor(user.uid, key);
       for (const item of values) {
-        if (!item?.id || item.isAll || map.get(item.id) === stable(item)) continue;
+        if (!item?.id || item.isAll || map.get(item.id)?.signature === stable(item)) continue;
         const accepted = await safelyWriteItem(user.uid, key, item);
-        if (accepted) map.set(item.id, stable(item));
+        if (accepted) map.set(item.id, {
+          id: item.id,
+          value: item,
+          signature: stable(item),
+          deleted: false,
+          clientUpdatedAt: clientUpdatedAt(item)
+        });
       }
       reportSync("connected");
     },
