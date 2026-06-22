@@ -393,12 +393,50 @@ function createFirebaseStorageAdapter() {
       }
       reportSync("connected");
     },
+    // 新規・編集の投稿は配列同期を経由せず、1ドキュメントの確定を待ってからUIに反映する。
+    async saveItem(key, item) {
+      try {
+        const user = await getFirebaseUser();
+        if (user.isAnonymous) return { ok: true };
+        if (!DATA_KEYS[key]) return { ok: false, error: new Error("保存先が不正です") };
+        const accepted = await safelyWriteItem(user.uid, key, item);
+        if (!accepted) {
+          const error = new Error("この記録は別の端末で更新されています。再読み込みして内容を確認してください。");
+          reportSync("error", error);
+          return { ok: false, error };
+        }
+        knownFor(user.uid, key).set(item.id, {
+          id: item.id,
+          value: item,
+          signature: stable(item),
+          deleted: false,
+          clientUpdatedAt: clientUpdatedAt(item)
+        });
+        reportSync("connected");
+        return { ok: true };
+      } catch (error) {
+        reportSync("error", error);
+        syncLog("item-save-failed", { key, id: item?.id, message: error.message });
+        return { ok: false, error };
+      }
+    },
     async delete(key) {
       await localStorageAdapter.delete(key);
     },
     async deleteItem(key, id) {
-      const user = await getFirebaseUser();
-      if (!user.isAnonymous) await safelyDeleteItem(user.uid, key, id);
+      try {
+        const user = await getFirebaseUser();
+        if (user.isAnonymous) return { ok: true };
+        const accepted = await safelyDeleteItem(user.uid, key, id);
+        if (!accepted) return { ok: false, error: new Error("この記録は別の端末で更新されています") };
+        knownFor(user.uid, key).set(id, { id, deleted: true, clientUpdatedAt: Date.now() });
+        reportSync("connected");
+        return { ok: true };
+      } catch (error) {
+        reportSync("error", error);
+        syncLog("item-delete-failed", { key, id, message: error.message });
+        return { ok: false, error };
+      }
     },
     subscribe(key, listener) {
       const set = listeners.get(key) || new Set();
@@ -433,6 +471,7 @@ async function createNativeStorageAdapter() {
       await localStorageAdapter.delete(key);
       try { await LoofCloud.delete({ key }); } catch (_) {}
     },
+    async saveItem() { return { ok: true }; },
     async deleteItem() {},
     subscribe() { return () => {}; }
   };
@@ -447,6 +486,7 @@ if (typeof window !== "undefined" && !window.storage) {
     async set(key, value) { return (await adapterPromise).set(key, value); },
     async delete(key) { return (await adapterPromise).delete(key); },
     async deleteItem(key, id) { return (await adapterPromise).deleteItem?.(key, id); },
+    async saveItem(key, item) { return (await adapterPromise).saveItem?.(key, item); },
     subscribe(key, listener) {
       let alive = true;
       let unsubscribe = () => {};

@@ -231,20 +231,29 @@ export default function App() {
     [entries, currentId, account]
   );
 
-  const upsert = useCallback((entry) => {
+  const upsert = useCallback(async (entry) => {
     const next = { ...entry, updatedAt: new Date().toISOString() };
+    const result = await window.storage?.saveItem?.("nb.entries", next);
+    if (result && !result.ok) return false;
     setEntries(es => {
       const i = es.findIndex(e => e.id === next.id);
       if (i === -1) return [next, ...es];
       const copy = es.slice(); copy[i] = next; return copy;
     });
+    return true;
   }, [setEntries]);
-  const remove = useCallback((id) => {
-    // 配列の欠落を削除扱いにしない。明示した1件だけをFirestoreで tombstone 化する。
-    window.storage?.deleteItem?.("nb.entries", id).catch(() => {});
+  const remove = useCallback(async (id) => {
+    // 配列の欠落を削除扱いにしない。サーバーで1件のtombstoneが確定してから表示から外す。
+    const result = await window.storage?.deleteItem?.("nb.entries", id);
+    if (result && !result.ok) return false;
     setEntries(es => es.filter(e => e.id !== id));
+    return true;
   }, [setEntries]);
-  const patch = useCallback((id, p) => setEntries(es => es.map(e => e.id === id ? { ...e, ...p, updatedAt: new Date().toISOString() } : e)), [setEntries]);
+  const patch = useCallback(async (id, p) => {
+    const entry = entries.find(e => e.id === id);
+    if (!entry) return false;
+    return upsert({ ...entry, ...p, updatedAt: new Date().toISOString() });
+  }, [entries, upsert]);
   const [draft, setDraft] = useState(null);
   const [collections, setCollections, collectionsLoaded, collectionsError] = usePersisted("nb.collections", []);
   const [cpFor, setCpFor] = useState(null); // entry to add to a commonplace
@@ -400,9 +409,14 @@ export default function App() {
           accounts={accounts}
           initial={editing || draft || newEntry(currentId)}
           isNew={!editing}
-          onSave={(e) => { if (!entryEmpty(e)) upsert(e); setDraft(null); setView("timeline"); }}
+          onSave={async (e) => {
+            if (entryEmpty(e)) { setDraft(null); setView("timeline"); return true; }
+            const saved = await upsert(e);
+            if (saved) { setDraft(null); setView("timeline"); }
+            return saved;
+          }}
           onCancel={() => { setDraft(null); setView("timeline"); }}
-          onDelete={editing ? () => { remove(editing.id); setView("timeline"); } : null}
+          onDelete={editing ? async () => { if (await remove(editing.id)) setView("timeline"); } : null}
           onCopy={(e) => copyText(entryPlainText(e))}
         />
       )}
@@ -772,6 +786,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
   const [focusIdx, setFocusIdx] = useState(0);
   const fileRef = useRef(null);
   const [toast, setToast] = useState("");
+  const [saving, setSaving] = useState(false);
   const account = accounts.find(a => a.id === acctId) || accounts[0];
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(""), 1400); };
@@ -816,11 +831,22 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
     if (imgs.length) { e.preventDefault(); addImages(imgs); }
   };
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     const trimmed = blocks
       .filter((b, i) => !(b.type === "text" && !b.value.trim()) || blocks.filter(x => x.type === "text").length === 1)
       .map(b => b.type === "text" ? { ...b, value: b.value.replace(/\s+$/,"") } : b);
-    onSave({ ...initial, accountId: acctId, blocks: trimmed.length ? trimmed : blankBlocks(), updatedAt: new Date().toISOString() });
+    setSaving(true);
+    let saved = false;
+    try {
+      saved = await onSave({ ...initial, accountId: acctId, blocks: trimmed.length ? trimmed : blankBlocks(), updatedAt: new Date().toISOString() });
+    } catch (_) {
+      saved = false;
+    }
+    if (!saved) {
+      setSaving(false);
+      showToast("保存できませんでした。接続を確認してもう一度保存してください。");
+    }
   };
 
   return (
@@ -828,7 +854,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
       <header className="topbar compTop">
         <button className="txtbtn" onClick={onCancel}>とじる</button>
         <span style={{ flex: 1 }} />
-        <button className="postBtn" onClick={save}>保存</button>
+        <button className="postBtn" disabled={saving} onClick={save}>{saving ? "保存中…" : "保存"}</button>
       </header>
 
       <main className="editor" onPaste={handlePaste}>
@@ -874,7 +900,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
         <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPick} />
         <div className="toolRight">
           <button className="tool ghost" onClick={async () => { if (await onCopy({ ...initial, blocks })) showToast("本文をコピーしました"); }}>全文コピー</button>
-          {onDelete && <button className="tool danger" onClick={async () => { if (await askConfirm("この記録を削除しますか？", { danger: true, okText: "削除" })) onDelete(); }}><Trash /></button>}
+          {onDelete && <button className="tool danger" onClick={async () => { if (await askConfirm("この記録を削除しますか？", { danger: true, okText: "削除" })) await onDelete(); }}><Trash /></button>}
         </div>
       </div>
 
@@ -948,9 +974,16 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
     const n = counts[acc.id] || 0;
     if (accounts.filter(a => !a.isAll).length <= 1) { await askAlert("最後のノートは削除できません。"); return; }
     if (!(await askConfirm(`「${acc.name}」を削除しますか？${n > 0 ? `\nこのノートの記録 ${n} 件もすべて削除されます。` : ""}`, { danger: true, okText: "削除" }))) return;
-    // 明示削除だけをtombstoneとして送る。配列全体を空/欠落で同期しない。
-    entries.filter(e => e.accountId === acc.id).forEach(e => window.storage?.deleteItem?.("nb.entries", e.id).catch(() => {}));
-    window.storage?.deleteItem?.("nb.accounts", acc.id).catch(() => {});
+    // 明示削除だけをtombstoneとして送る。全件が確定するまで表示からは消さない。
+    const targets = entries.filter(e => e.accountId === acc.id);
+    const results = await Promise.all([
+      ...targets.map(e => window.storage?.deleteItem?.("nb.entries", e.id)),
+      window.storage?.deleteItem?.("nb.accounts", acc.id)
+    ]);
+    if (results.some(result => result && !result.ok)) {
+      await askAlert("削除を保存できませんでした。記録はそのまま残しています。");
+      return;
+    }
     setEntries(es => es.filter(e => e.accountId !== acc.id));
     setAccounts(as => as.filter(a => a.id !== acc.id));
     if (currentId === acc.id) setCurrentId(accounts.find(a => a.id !== acc.id).id);
@@ -1116,7 +1149,11 @@ function Commonplace({ accounts, entries, collections, setCollections, onCreate,
   };
   const delCollection = async (c) => {
     if (await askConfirm(`「${c.name}」を削除しますか？\n（記録そのものは消えません）`, { danger: true, okText: "削除" })) {
-      window.storage?.deleteItem?.("nb.collections", c.id).catch(() => {});
+      const result = await window.storage?.deleteItem?.("nb.collections", c.id);
+      if (result && !result.ok) {
+        await askAlert("削除を保存できませんでした。コレクションは残しています。");
+        return;
+      }
       setCollections(cs => cs.filter(x => x.id !== c.id)); setSel(null);
     }
   };
