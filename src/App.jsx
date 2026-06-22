@@ -460,6 +460,7 @@ export default function App() {
 function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPostDelete, onQuote, onAddCommonplace, onSwitch, onProfile, onCommonplace, onCopyDay }) {
   const [q, setQ] = useState("");
   const [jumpDate, setJumpDate] = useState(null);
+  const [showAll, setShowAll] = useState(false);
   const dateRef = useRef(null);
   const acctFor = e => account?.isAll ? (accounts.find(a => a.id === e.accountId) || account) : account;
   const filtered = useMemo(() => {
@@ -476,6 +477,10 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
       items: map[date].sort((a, b) => a.createdAt < b.createdAt ? -1 : 1), // oldest→newest within a day
     }));
   }, [filtered]);
+  const allItems = useMemo(
+    () => [...filtered].sort((a, b) => a.createdAt < b.createdAt ? 1 : -1),
+    [filtered]
+  );
 
   return (
     <div className="screen">
@@ -512,9 +517,22 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
           <Cal />
           <input type="date" className="dateInput" onChange={e => { if (e.target.value) setJumpDate({ date: e.target.value, n: Date.now() }); }} />
         </label>
+        <button className={"allPostsBtn" + (showAll ? " on" : "")} onClick={() => setShowAll(v => !v)}>
+          {showAll ? "日付表示" : "すべて表示"}
+        </button>
       </div>
 
-      {q.trim() ? (
+      {showAll ? (
+        <main className="feed allPostsFeed">
+          <div className="allPostsHead">
+            <span>すべての記録</span><span>{allItems.length}件</span>
+          </div>
+          {allItems.length === 0
+            ? <div className="empty"><div className="emptyMark"><GhostMark size={40} /></div>{q.trim() ? "見つかりませんでした。" : "まだ何もありません。"}</div>
+            : allItems.map(e => <PostCard key={e.id} entry={e} account={acctFor(e)} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
+          <div style={{ height: 96 }} />
+        </main>
+      ) : q.trim() ? (
         <main className="feed">
           {days.length === 0
             ? <div className="empty"><div className="emptyMark"><GhostMark size={40} /></div>見つかりませんでした。</div>
@@ -1757,6 +1775,10 @@ input,textarea{font-family:inherit;font-weight:600;}
 .dateBtn svg{color:${INK};}
 .dateInput{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;padding:0;margin:0;cursor:pointer;}
 .dateInput::-webkit-calendar-picker-indicator{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
+.allPostsBtn{flex-shrink:0;height:42px;border:1px solid ${LINE};border-radius:13px;background:#fff;color:${MUT};font-size:12px;padding:0 11px;white-space:nowrap;}
+.allPostsBtn:active,.allPostsBtn.on{background:${INK};border-color:${INK};color:#fff;}
+.allPostsHead{display:flex;align-items:center;justify-content:space-between;padding:7px 2px 11px;color:${MUT};font-size:12px;letter-spacing:.04em;}
+.allPostsHead span:first-child{color:${INK};font-size:14px;font-weight:800;}
 .xTime.asLink{background:none;border:none;padding:0;color:${MUT};font-size:15px;font-weight:400;cursor:pointer;}
 .xTime.asLink:active{text-decoration:underline;color:${INK};}
 
