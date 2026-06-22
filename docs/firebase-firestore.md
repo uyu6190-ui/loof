@@ -23,7 +23,7 @@ service cloud.firestore {
 
 新しいデータは、`users/{uid}/entries/{entryId}`、`accounts/{accountId}`、`collections/{collectionId}` のように1件ずつ保存されます。`nb.entries` のような配列全体を保存・上書きすることはありません。
 
-各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はローカルキャッシュを使わず、まずFirestoreサーバーから復元します。
+各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はローカルキャッシュを使わず、まずFirestoreサーバーから復元します。画像を含む大きな投稿は、更新世代ごとの `revisions/{revision}/chunks` に分割されるため、古い端末が同じchunk IDで新しい画像を上書きすることもありません。
 
 過去のバージョンが保存した `users/{uid}/storage/nb.entries` などは、最初の起動時に一度だけ個別ドキュメントへ移行します。ブラウザーやPWAのlocalStorage/IndexedDBは移行元にしないため、古い端末のローカル状態でFirestoreを上書きしません。
 

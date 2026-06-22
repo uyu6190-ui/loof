@@ -88,8 +88,13 @@ function clientUpdatedAt(value) {
   return Number.isFinite(candidate) ? candidate : Date.now();
 }
 
-async function readChunks(target, chunkCount) {
-  const snapshots = await getDocsFromServer(collection(target, "chunks"));
+async function readChunks(target, chunkCount, revision) {
+  // revisionがある新形式では、画像ごとの本文を世代別に分離する。
+  // 古いroot/chunksは移行済みデータを読むためだけに残す。
+  const source = revision
+    ? collection(target, "revisions", revision, "chunks")
+    : collection(target, "chunks");
+  const snapshots = await getDocsFromServer(source);
   return snapshots.docs
     .map(snapshot => snapshot.data())
     .filter(chunk => Number.isInteger(chunk.index) && chunk.index < chunkCount)
@@ -101,7 +106,7 @@ async function readChunks(target, chunkCount) {
 async function payloadFromSnapshot(snapshot) {
   const data = snapshot.data();
   if (typeof data.payload === "string") return JSON.parse(data.payload);
-  if (data.chunkCount > 0) return JSON.parse(await readChunks(snapshot.ref, data.chunkCount));
+  if (data.chunkCount > 0) return JSON.parse(await readChunks(snapshot.ref, data.chunkCount, data.revision));
   return null;
 }
 
@@ -115,7 +120,7 @@ async function readLegacyValue(userId, key) {
   return readChunks(target, data.chunkCount);
 }
 
-async function writeChunks(target, serialized) {
+async function writeChunks(target, serialized, revision) {
   const chunks = [];
   for (let index = 0; index < serialized.length; index += CHUNK_SIZE) {
     chunks.push(serialized.slice(index, index + CHUNK_SIZE));
@@ -124,7 +129,8 @@ async function writeChunks(target, serialized) {
     const batch = writeBatch(db);
     chunks.slice(start, start + 400).forEach((data, offset) => {
       const index = start + offset;
-      batch.set(doc(target, "chunks", String(index).padStart(6, "0")), { index, data }, { merge: true });
+      // revisionを含むパスなので、古い端末が新しい画像のchunkを上書きできない。
+      batch.set(doc(target, "revisions", revision, "chunks", String(index).padStart(6, "0")), { index, data }, { merge: true });
     });
     await batch.commit();
   }
@@ -137,8 +143,10 @@ async function safelyWriteItem(userId, key, item, { migration = false } = {}) {
   const serialized = JSON.stringify(item);
   const proposedAt = clientUpdatedAt(item);
   const large = serialized.length > CHUNK_SIZE;
-  const chunkCount = large ? await writeChunks(target, serialized) : 0;
   const clientId = getClientId();
+  const revision = large ? `${proposedAt}-${clientId}-${Math.random().toString(36).slice(2, 10)}` : null;
+  // 先に書かれた古い世代はmetadataが採用されない限り参照されない。ここで同一chunkを共有しない。
+  const chunkCount = large ? await writeChunks(target, serialized, revision) : 0;
 
   const accepted = await runTransaction(db, async (transaction) => {
     const previous = await transaction.get(target);
@@ -152,6 +160,7 @@ async function safelyWriteItem(userId, key, item, { migration = false } = {}) {
       id: item.id,
       payload: large ? deleteField() : serialized,
       chunkCount,
+      revision: large ? revision : deleteField(),
       clientUpdatedAt: proposedAt,
       updatedAt: serverTimestamp(),
       clientId,
