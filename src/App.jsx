@@ -34,6 +34,7 @@ function usePersisted(key, init) {
   const [val, setVal] = useState(init);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
+  const writeQueue = useRef(Promise.resolve());
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -61,9 +62,20 @@ function usePersisted(key, init) {
   }, [key]);
   useEffect(() => {
     if (!loaded) return;
-    (async () => {
-      try { if (window.storage) await window.storage.set(key, JSON.stringify(val)); } catch (_) {}
-    })();
+    const serialized = JSON.stringify(val);
+    // 状態更新を順番に送る。初回復元・連続編集・Firestore通知が書き込み順を崩さないようにする。
+    writeQueue.current = writeQueue.current.catch(() => {}).then(async () => {
+      try {
+        if (window.storage) await window.storage.set(key, serialized);
+        setError(null);
+      } catch (writeError) {
+        console.error("[loof sync] write-failed", { key, error: writeError });
+        setError(writeError);
+        window.dispatchEvent(new CustomEvent("loof:sync-status", {
+          detail: { status: "error", message: writeError?.message || "保存に失敗しました" }
+        }));
+      }
+    });
   }, [key, val, loaded]);
   return [val, setVal, loaded, error];
 }
@@ -188,12 +200,13 @@ const accLabel = (a) => (a?.name || "").trim() || ((a?.bio || "").split("\n")[0]
 /* ============================================================ */
 export default function App() {
   const [accounts, setAccounts, accLoaded, accountsError] = usePersisted("nb.accounts", []);
-  const [entries, setEntries, , entriesError] = usePersisted("nb.entries", []);
-  const [currentId, setCurrentId] = usePersisted("nb.current", "");
+  const [entries, setEntries, entriesLoaded, entriesError] = usePersisted("nb.entries", []);
+  const [currentId, setCurrentId, currentLoaded, currentError] = usePersisted("nb.current", "");
 
   // seed default accounts on first run
   useEffect(() => {
-    if (!accLoaded) return;
+    // 現在選択中のノートもサーバーから復元してから初期値を決める。
+    if (!accLoaded || !currentLoaded) return;
     if (accounts.length === 0) {
       const seeded = SEED_ACCOUNTS.map(s => ({ ...newAccount(s.name), bio: s.bio }));
       setAccounts([makeAll(), ...seeded]);
@@ -206,7 +219,7 @@ export default function App() {
     if (!accounts.find(a => a.id === currentId)) {
       setCurrentId((accounts.find(a => !a.isAll) || accounts[0]).id);
     }
-  }, [accLoaded]); // eslint-disable-line
+  }, [accLoaded, currentLoaded]); // eslint-disable-line
 
   const [view, setView] = useState("timeline"); // timeline | compose | accounts
   const [editId, setEditId] = useState(null);
@@ -233,10 +246,10 @@ export default function App() {
   }, [setEntries]);
   const patch = useCallback((id, p) => setEntries(es => es.map(e => e.id === id ? { ...e, ...p, updatedAt: new Date().toISOString() } : e)), [setEntries]);
   const [draft, setDraft] = useState(null);
-  const [collections, setCollections] = usePersisted("nb.collections", []);
+  const [collections, setCollections, collectionsLoaded, collectionsError] = usePersisted("nb.collections", []);
   const [cpFor, setCpFor] = useState(null); // entry to add to a commonplace
   const [dayView, setDayView] = useState(null); // {date}
-  const [icloud, setIcloud] = usePersisted("nb.icloud", false);
+  const [icloud, setIcloud, icloudLoaded, icloudError] = usePersisted("nb.icloud", false);
   const [aboutBack, setAboutBack] = useState("accounts");
   const openAbout = (from) => { setAboutBack(from); setView("about"); };
   const [auth, setAuth] = usePersisted("nb.auth", null);
@@ -340,7 +353,7 @@ export default function App() {
     </div>
   );
 
-  if (loggedInWithGoogle && (accountsError || entriesError || syncStatus === "error")) return (
+  if (loggedInWithGoogle && (accountsError || entriesError || currentError || collectionsError || icloudError || syncStatus === "error")) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />
@@ -352,7 +365,9 @@ export default function App() {
     </div>
   );
 
-  if (!account) return <div style={S.root}><style>{CSS}</style><ConfirmHost /><div style={{padding:40,color:SUB}}>読み込み中…</div></div>;
+  const dataReady = accLoaded && entriesLoaded && currentLoaded && collectionsLoaded && icloudLoaded;
+  // entries の初回サーバー読み込みが終わる前に編集できると、遅れて届いた初期一覧が新規投稿を戻してしまう。
+  if (!dataReady || !account) return <div style={S.root}><style>{CSS}</style><ConfirmHost /><div style={{padding:40,color:SUB}}>Firestoreから記録を復元中…</div></div>;
 
   return (
     <div style={S.root} className="root">
