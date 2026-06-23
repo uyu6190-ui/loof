@@ -319,9 +319,8 @@ function createFirebaseStorageAdapter() {
     return known.get(id);
   };
 
-  async function loadItemsFromServer(user, key, { initial = false } = {}) {
-    const snapshots = await getDocsFromServer(collectionRef(user.uid, key));
-    const incoming = await Promise.all(snapshots.docs.map(async snapshot => {
+  async function mergeItemSnapshots(user, key, snapshots, { initial = false } = {}) {
+    const incoming = await Promise.all(snapshots.map(async snapshot => {
       const data = snapshot.data();
       const version = Number(data.clientUpdatedAt || 0);
       if (data.deletedAt) return { id: snapshot.id, version, deleted: true };
@@ -363,6 +362,11 @@ function createFirebaseStorageAdapter() {
     return [...map.values()].filter(record => !record.deleted && !record.quarantined && record.value).map(record => record.value);
   }
 
+  async function loadItemsFromServer(user, key, { initial = false } = {}) {
+    const snapshots = await getDocsFromServer(collectionRef(user.uid, key));
+    return mergeItemSnapshots(user, key, snapshots.docs, { initial });
+  }
+
   async function loadPreferenceFromServer(user, key) {
     const snapshot = await getDocFromServer(preferenceRef(user.uid, key));
     return snapshot.exists() ? JSON.stringify(snapshot.data().value) : null;
@@ -382,8 +386,9 @@ function createFirebaseStorageAdapter() {
       const previousRefresh = refreshQueues.get(id) || Promise.resolve();
       const refresh = previousRefresh.catch(() => {}).then(async () => {
         const value = DATA_KEYS[key]
-          ? JSON.stringify(await loadItemsFromServer(user, key))
-          : await loadPreferenceFromServer(user, key);
+          // 監視通知のたびに全件を再取得しない。変化したドキュメントだけを統合する。
+          ? JSON.stringify(await mergeItemSnapshots(user, key, snapshot.docChanges().map(change => change.doc)))
+          : (snapshot.exists() ? JSON.stringify(snapshot.data().value) : null);
         if (value != null) notify(key, value);
         reportSync("connected");
         syncLog("server-snapshot-applied", { userId: user.uid, key });
