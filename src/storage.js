@@ -3,7 +3,8 @@ import {
   addDoc, collection, deleteField, doc, getDocFromServer, getDocsFromServer,
   onSnapshot, runTransaction, serverTimestamp, setDoc, writeBatch
 } from "firebase/firestore";
-import { db, getFirebaseUser } from "./firebase.js";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { db, getFirebaseUser, mediaStorage } from "./firebase.js";
 
 const DATA_KEYS = {
   "nb.accounts": "accounts",
@@ -90,6 +91,38 @@ function clientUpdatedAt(value) {
   return Number.isFinite(candidate) ? candidate : Date.now();
 }
 
+function imageExtension(contentType) {
+  if (contentType === "image/png") return "png";
+  if (contentType === "image/webp") return "webp";
+  if (contentType === "image/gif") return "gif";
+  return "jpg";
+}
+
+async function uploadInlineImages(userId, key, item) {
+  // Firestoreにはdata URLを残さない。画像本体はFirebase Storage、投稿にはURLだけを保存する。
+  const revision = `${Date.now()}-${getClientId()}-${Math.random().toString(36).slice(2, 8)}`;
+  const walk = async (value, path = []) => {
+    if (typeof value === "string" && value.startsWith("data:image/")) {
+      const response = await fetch(value);
+      const blob = await response.blob();
+      const name = `${path.join("-") || "image"}.${imageExtension(blob.type)}`;
+      const target = ref(mediaStorage, `users/${userId}/media/${key}/${item.id}/${revision}/${name}`);
+      await uploadBytes(target, blob, { contentType: blob.type || "image/jpeg" });
+      const url = await getDownloadURL(target);
+      syncLog("image-uploaded", { userId, key, id: item.id, path: path.join(".") });
+      return url;
+    }
+    if (Array.isArray(value)) return Promise.all(value.map((part, index) => walk(part, [...path, index])));
+    if (value && typeof value === "object") {
+      const copy = {};
+      for (const [name, part] of Object.entries(value)) copy[name] = await walk(part, [...path, name]);
+      return copy;
+    }
+    return value;
+  };
+  return walk(item);
+}
+
 async function readChunks(target, chunkCount, revision) {
   // revisionがある新形式では、画像ごとの本文を世代別に分離する。
   // 古いroot/chunksは移行済みデータを読むためだけに残す。
@@ -141,11 +174,12 @@ async function writeChunks(target, serialized, revision) {
   return chunks.length;
 }
 
-async function safelyWriteItem(userId, key, item, { migration = false } = {}) {
-  if (!item?.id || item.isAll) return false;
-  const target = itemRef(userId, key, item.id);
-  const serialized = JSON.stringify(item);
-  const proposedAt = clientUpdatedAt(item);
+async function safelyWriteItem(userId, key, item, { migration = false, uploadImages = true } = {}) {
+  if (!item?.id || item.isAll) return { accepted: false, item };
+  const storedItem = uploadImages ? await uploadInlineImages(userId, key, item) : item;
+  const target = itemRef(userId, key, storedItem.id);
+  const serialized = JSON.stringify(storedItem);
+  const proposedAt = clientUpdatedAt(storedItem);
   const large = serialized.length > CHUNK_SIZE;
   const clientId = getClientId();
   const revision = large ? `${proposedAt}-${clientId}-${Math.random().toString(36).slice(2, 10)}` : null;
@@ -161,7 +195,7 @@ async function safelyWriteItem(userId, key, item, { migration = false } = {}) {
       return false;
     }
     transaction.set(target, {
-      id: item.id,
+      id: storedItem.id,
       payload: large ? deleteField() : serialized,
       chunkCount,
       revision: large ? revision : deleteField(),
@@ -175,12 +209,12 @@ async function safelyWriteItem(userId, key, item, { migration = false } = {}) {
   });
 
   syncLog(accepted ? "item-written" : "stale-write-skipped", {
-    userId, key, id: item.id, clientUpdatedAt: proposedAt, migration
+    userId, key, id: storedItem.id, clientUpdatedAt: proposedAt, migration
   });
   void writeAuditLog(userId, accepted ? "item-written" : "stale-write-skipped", {
-    key, id: item.id, clientUpdatedAt: proposedAt, migration
+    key, id: storedItem.id, clientUpdatedAt: proposedAt, migration
   });
-  return accepted;
+  return { accepted, item: storedItem };
 }
 
 async function safelyDeleteItem(userId, key, id) {
@@ -239,7 +273,7 @@ async function migrateLegacyFirestore(user) {
       try {
         const values = JSON.parse(raw);
         if (Array.isArray(values)) {
-          for (const value of values) await safelyWriteItem(user.uid, key, value, { migration: true });
+          for (const value of values) await safelyWriteItem(user.uid, key, value, { migration: true, uploadImages: false });
         }
       } catch (error) {
         syncLog("legacy-migration-invalid", { userId: user.uid, key, message: error.message });
@@ -394,13 +428,13 @@ function createFirebaseStorageAdapter() {
       const map = knownFor(user.uid, key);
       for (const item of values) {
         if (!item?.id || item.isAll || map.get(item.id)?.signature === stable(item)) continue;
-        const accepted = await safelyWriteItem(user.uid, key, item);
-        if (accepted) map.set(item.id, {
-          id: item.id,
-          value: item,
-          signature: stable(item),
+        const result = await safelyWriteItem(user.uid, key, item);
+        if (result.accepted) map.set(result.item.id, {
+          id: result.item.id,
+          value: result.item,
+          signature: stable(result.item),
           deleted: false,
-          clientUpdatedAt: clientUpdatedAt(item)
+          clientUpdatedAt: clientUpdatedAt(result.item)
         });
       }
       reportSync("connected");
@@ -411,21 +445,21 @@ function createFirebaseStorageAdapter() {
         const user = await getFirebaseUser();
         if (user.isAnonymous) return { ok: true };
         if (!DATA_KEYS[key]) return { ok: false, error: new Error("保存先が不正です") };
-        const accepted = await safelyWriteItem(user.uid, key, item);
-        if (!accepted) {
+        const result = await safelyWriteItem(user.uid, key, item);
+        if (!result.accepted) {
           const error = new Error("この記録は別の端末で更新されています。再読み込みして内容を確認してください。");
           reportSync("error", error);
           return { ok: false, error };
         }
-        knownFor(user.uid, key).set(item.id, {
-          id: item.id,
-          value: item,
-          signature: stable(item),
+        knownFor(user.uid, key).set(result.item.id, {
+          id: result.item.id,
+          value: result.item,
+          signature: stable(result.item),
           deleted: false,
-          clientUpdatedAt: clientUpdatedAt(item)
+          clientUpdatedAt: clientUpdatedAt(result.item)
         });
         reportSync("connected");
-        return { ok: true };
+        return { ok: true, item: result.item };
       } catch (error) {
         reportSync("error", error);
         syncLog("item-save-failed", { key, id: item?.id, message: error.message });

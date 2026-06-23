@@ -235,10 +235,11 @@ export default function App() {
     const next = { ...entry, updatedAt: new Date().toISOString() };
     const result = await window.storage?.saveItem?.("nb.entries", next);
     if (result && !result.ok) return false;
+    const stored = result?.item || next;
     setEntries(es => {
-      const i = es.findIndex(e => e.id === next.id);
-      if (i === -1) return [next, ...es];
-      const copy = es.slice(); copy[i] = next; return copy;
+      const i = es.findIndex(e => e.id === stored.id);
+      if (i === -1) return [stored, ...es];
+      const copy = es.slice(); copy[i] = stored; return copy;
     });
     return true;
   }, [setEntries]);

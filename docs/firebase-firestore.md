@@ -6,7 +6,8 @@
 2. 同じ画面で「Google」を有効化し、サポート用メールアドレスを選んで保存する。
 3. **Authentication** → **Settings** → **Authorized domains** に `loof-tau.vercel.app` を追加する。独自ドメインを設定した場合は、そのドメインも追加する。
 4. **Firestore Database** を作成する（本番モードで可）。
-5. **Rules** に以下を貼り付けて公開する。
+5. **Storage** を開いて有効化する（画像本体の保存先）。
+6. Firestore の **Rules** に以下を貼り付けて公開する。
 
 ```text
 rules_version = '2';
@@ -19,11 +20,26 @@ service cloud.firestore {
 }
 ```
 
+7. Storage の **Rules** に以下を貼り付けて公開する。
+
+```text
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
+```
+
 ## 同期の安全設計
 
 新しいデータは、`users/{uid}/entries/{entryId}`、`accounts/{accountId}`、`collections/{collectionId}` のように1件ずつ保存されます。`nb.entries` のような配列全体を保存・上書きすることはありません。
 
-各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はローカルキャッシュを使わず、まずFirestoreサーバーから復元します。画像を含む大きな投稿は、更新世代ごとの `revisions/{revision}/chunks` に分割されるため、古い端末が同じchunk IDで新しい画像を上書きすることもありません。
+各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はローカルキャッシュを使わず、まずFirestoreサーバーから復元します。
+
+画像本体は `users/{uid}/media/...` にFirebase Storageへ保存し、Firestoreの投稿にはダウンロードURLだけを保存します。そのため複数画像でもFirestoreのドキュメント・バッチ上限に引っかかりません。過去のdata URL画像は読めるまま残り、投稿を次回編集・保存した時点でStorage URLへ移行します。
 
 過去のバージョンが保存した `users/{uid}/storage/nb.entries` などは、最初の起動時に一度だけ個別ドキュメントへ移行します。ブラウザーやPWAのlocalStorage/IndexedDBは移行元にしないため、古い端末のローカル状態でFirestoreを上書きしません。
 

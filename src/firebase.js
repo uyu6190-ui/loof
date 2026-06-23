@@ -10,6 +10,7 @@ import {
   setPersistence,
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 // Firebase の Web 設定値は公開して利用する識別子です。アクセスの保護は
 // Firestore Security Rules と Firebase Authentication で行います。
@@ -26,6 +27,7 @@ const firebaseConfig = {
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const mediaStorage = getStorage(app);
 // Googleログイン状態を、このブラウザ・このドメインに明示的に永続化する。
 const authPersistenceReady = setPersistence(auth, browserLocalPersistence).catch(() => undefined);
 
