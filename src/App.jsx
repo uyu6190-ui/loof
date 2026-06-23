@@ -266,10 +266,14 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(undefined);
   const [authBusy, setAuthBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState("loading");
+  const [syncMessage, setSyncMessage] = useState("");
 
   useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
   useEffect(() => {
-    const onStatus = (event) => setSyncStatus(event.detail.status);
+    const onStatus = (event) => {
+      setSyncStatus(event.detail.status);
+      setSyncMessage(event.detail.message || "");
+    };
     window.addEventListener("loof:sync-status", onStatus);
     return () => window.removeEventListener("loof:sync-status", onStatus);
   }, []);
@@ -363,13 +367,14 @@ export default function App() {
     </div>
   );
 
-  if (loggedInWithGoogle && (accountsError || entriesError || currentError || collectionsError || icloudError || syncStatus === "error")) return (
+  const initialLoadError = accountsError || entriesError || currentError || collectionsError || icloudError;
+  if (loggedInWithGoogle && initialLoadError) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />
       <div className="syncError">
         <div className="syncErrorTitle">Firestore に接続できません</div>
-        <div className="syncErrorText">Firebase Consoleで Firestore Database とルールを確認してから、もう一度開いてください。</div>
+        <div className="syncErrorText">{initialLoadError?.message || syncMessage || "Firebase Consoleで Firestore Database とルールを確認してから、もう一度開いてください。"}</div>
         <button className="primary" onClick={() => window.location.reload()}>再読み込み</button>
       </div>
     </div>

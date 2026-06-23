@@ -266,11 +266,22 @@ async function migrateLegacyFirestore(user) {
     const markerSnapshot = await getDocFromServer(marker);
     if (markerSnapshot.data()?.individualDocumentsV1) return;
 
+    // すでに個別ドキュメントがあれば、重い旧形式データを起動時に再移行しない。
+    // 旧画像の失敗が、正常な新データの読み込みまで止めることを防ぐ。
+    const existingEntries = await getDocsFromServer(collectionRef(user.uid, "nb.entries"));
+    if (!existingEntries.empty) {
+      await setDoc(marker, {
+        individualDocumentsV1: true, importedAt: serverTimestamp(), clientId: getClientId(), skippedLegacyImport: true
+      }, { merge: true });
+      syncLog("legacy-migration-skipped", { userId: user.uid, reason: "modern-documents-exist" });
+      return;
+    }
+
     // ブラウザー/PWAのlocalStorageは移行元にしない。旧Firestoreデータだけを一度だけ取り込む。
     for (const key of Object.keys(DATA_KEYS)) {
-      const raw = await readLegacyValue(user.uid, key);
-      if (!raw) continue;
       try {
+        const raw = await readLegacyValue(user.uid, key);
+        if (!raw) continue;
         const values = JSON.parse(raw);
         if (Array.isArray(values)) {
           for (const value of values) await safelyWriteItem(user.uid, key, value, { migration: true, uploadImages: false });
@@ -280,9 +291,12 @@ async function migrateLegacyFirestore(user) {
       }
     }
     for (const key of PREFERENCE_KEYS) {
-      const raw = await readLegacyValue(user.uid, key);
-      if (raw == null) continue;
-      try { await safelyWritePreference(user.uid, key, raw); } catch (_) {}
+      try {
+        const raw = await readLegacyValue(user.uid, key);
+        if (raw != null) await safelyWritePreference(user.uid, key, raw);
+      } catch (error) {
+        syncLog("legacy-preference-migration-failed", { userId: user.uid, key, message: error.message });
+      }
     }
     await setDoc(marker, {
       individualDocumentsV1: true, importedAt: serverTimestamp(), clientId: getClientId()
