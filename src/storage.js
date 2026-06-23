@@ -11,7 +11,9 @@ const DATA_KEYS = {
   "nb.collections": "collections"
 };
 const PREFERENCE_KEYS = new Set(["nb.current", "nb.icloud"]);
-const CHUNK_SIZE = 700_000;
+// Firestoreは1ドキュメント1MiB・1バッチ10MiBまで。複数画像でも余裕を持たせる。
+const CHUNK_SIZE = 400_000;
+const CHUNKS_PER_BATCH = 8;
 const LoofCloud = registerPlugin("LoofCloud");
 const migrations = new Map();
 
@@ -95,12 +97,14 @@ async function readChunks(target, chunkCount, revision) {
     ? collection(target, "revisions", revision, "chunks")
     : collection(target, "chunks");
   const snapshots = await getDocsFromServer(source);
-  return snapshots.docs
+  const chunks = snapshots.docs
     .map(snapshot => snapshot.data())
     .filter(chunk => Number.isInteger(chunk.index) && chunk.index < chunkCount)
-    .sort((a, b) => a.index - b.index)
-    .map(chunk => chunk.data)
-    .join("");
+    .sort((a, b) => a.index - b.index);
+  if (chunks.length !== chunkCount || chunks.some((chunk, index) => chunk.index !== index || typeof chunk.data !== "string")) {
+    throw new Error(`画像投稿のチャンクが不足しています (${chunks.length}/${chunkCount})`);
+  }
+  return chunks.map(chunk => chunk.data).join("");
 }
 
 async function payloadFromSnapshot(snapshot) {
@@ -125,9 +129,9 @@ async function writeChunks(target, serialized, revision) {
   for (let index = 0; index < serialized.length; index += CHUNK_SIZE) {
     chunks.push(serialized.slice(index, index + CHUNK_SIZE));
   }
-  for (let start = 0; start < chunks.length; start += 400) {
+  for (let start = 0; start < chunks.length; start += CHUNKS_PER_BATCH) {
     const batch = writeBatch(db);
-    chunks.slice(start, start + 400).forEach((data, offset) => {
+    chunks.slice(start, start + CHUNKS_PER_BATCH).forEach((data, offset) => {
       const index = start + offset;
       // revisionを含むパスなので、古い端末が新しい画像のchunkを上書きできない。
       batch.set(doc(target, "revisions", revision, "chunks", String(index).padStart(6, "0")), { index, data }, { merge: true });
@@ -279,7 +283,9 @@ function createFirebaseStorageAdapter() {
         return { id: snapshot.id, version, deleted: false, value, signature: stable(value) };
       } catch (error) {
         syncLog("item-read-failed", { userId: user.uid, key, id: snapshot.id, message: error.message });
-        throw error;
+        // 1件の壊れた画像投稿で、他の投稿や全端末を接続エラーにしない。
+        void writeAuditLog(user.uid, "item-quarantined", { key, id: snapshot.id, message: error.message });
+        return { id: snapshot.id, version, deleted: false, quarantined: true };
       }
     }));
     const map = knownFor(user.uid, key);
@@ -287,6 +293,12 @@ function createFirebaseStorageAdapter() {
     // 「今回の一覧に無い」ことは削除ではない。削除はdeletedAtを持つ当該ドキュメントだけで確定する。
     incoming.forEach(record => {
       const previous = map.get(record.id);
+      if (record.quarantined) {
+        // 既に読めている内容は保ち、初回に読めない投稿だけを非表示で隔離する。
+        if (!previous) map.set(record.id, { ...record, clientUpdatedAt: record.version });
+        syncLog("quarantined-entry-skipped", { userId: user.uid, key, id: record.id });
+        return;
+      }
       if (!previous || record.version >= previous.clientUpdatedAt) {
         map.set(record.id, {
           ...record,
@@ -300,7 +312,7 @@ function createFirebaseStorageAdapter() {
         });
       }
     });
-    return [...map.values()].filter(record => !record.deleted).map(record => record.value);
+    return [...map.values()].filter(record => !record.deleted && !record.quarantined && record.value).map(record => record.value);
   }
 
   async function loadPreferenceFromServer(user, key) {
