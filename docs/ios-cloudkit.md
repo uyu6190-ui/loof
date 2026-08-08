@@ -48,6 +48,11 @@ type `LoofKV` in the private database.
 - `value`: JSON string
 - `updatedAt`: last native write date
 
+Item saves and deletes are serialized through this key-value record. Each
+mutation first fetches the latest CloudKit value, changes only the requested
+item, and saves the merged array before the UI treats the operation as complete.
+Guest/local fallback uses the same item-level merge behavior.
+
 Images are currently included in the existing JSON as compressed data URLs.
 Before App Store scale, consider moving image blocks to CloudKit assets so large
 photo-heavy histories sync more efficiently.

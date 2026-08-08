@@ -39,9 +39,11 @@ service firebase.storage {
 
 各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はローカルキャッシュを使わず、まずFirestoreサーバーから復元します。
 
+タイムライン、検索、カレンダー、画像一覧はいずれも全履歴を前提とするため、起動時の投稿復元を固定件数では打ち切りません。削除済みtombstoneは表示から除外しますが、「今回の一覧に無い」投稿を削除扱いにはしません。
+
 画像本体は `users/{uid}/media/...` にFirebase Storageへ保存し、Firestoreの投稿にはダウンロードURLだけを保存します。そのため複数画像でもFirestoreのドキュメント・バッチ上限に引っかかりません。過去のdata URL画像は読めるまま残り、投稿を次回編集・保存した時点でStorage URLへ移行します。
 
-過去のバージョンが保存した `users/{uid}/storage/nb.entries` などは、最初の起動時に一度だけ個別ドキュメントへ移行します。ブラウザーやPWAのlocalStorage/IndexedDBは移行元にしないため、古い端末のローカル状態でFirestoreを上書きしません。
+過去のバージョンが保存した `users/{uid}/storage/nb.entries` などは個別ドキュメントへ移行します。途中で止まった旧移行もV2リカバリーで再走査し、更新日時の比較によって現行データを巻き戻さず、不足している項目だけを再統合します。旧チャンク形式の投稿も読み込まれます。ブラウザーやPWAのlocalStorage/IndexedDBは移行元にしないため、古い端末のローカル状態でFirestoreを上書きしません。
 
 同期の記録はブラウザーの開発者ツールのConsoleで `[loof sync]` として確認できます。実際の更新・削除・古い更新の拒否は `users/{uid}/syncLogs` にも記録されるため、端末ごとの `clientId`、対象の種類・ID、時刻を後から確認できます。
 

@@ -1,10 +1,11 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import {
   addDoc, collection, deleteField, doc, getDocFromServer, getDocsFromServer,
-  limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, writeBatch
+  onSnapshot, runTransaction, serverTimestamp, setDoc, writeBatch
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { db, getFirebaseUser, mediaStorage } from "./firebase.js";
+import { storedArray, upsertStoredItem } from "./storage-utils.js";
 
 const DATA_KEYS = {
   "nb.accounts": "accounts",
@@ -15,7 +16,6 @@ const PREFERENCE_KEYS = new Set(["nb.current", "nb.icloud"]);
 // Firestoreは1ドキュメント1MiB・1バッチ10MiBまで。複数画像でも余裕を持たせる。
 const CHUNK_SIZE = 400_000;
 const CHUNKS_PER_BATCH = 8;
-const INITIAL_ENTRY_LIMIT = 100;
 const ENABLE_REALTIME_SNAPSHOTS = false;
 const ENABLE_FIRESTORE_AUDIT_LOGS = false;
 const LoofCloud = registerPlugin("LoofCloud");
@@ -28,7 +28,32 @@ const localStorageAdapter = {
     return value == null ? null : { value };
   },
   async set(key, value) { window.localStorage.setItem(key, value); },
-  async delete(key) { window.localStorage.removeItem(key); }
+  async delete(key) { window.localStorage.removeItem(key); },
+  async saveItem(key, item) {
+    if (!DATA_KEYS[key] || !item?.id || item.isAll) {
+      return { ok: false, error: new Error("保存先が不正です") };
+    }
+    try {
+      const next = upsertStoredItem(storedArray(window.localStorage.getItem(key), { strict: true }), item);
+      window.localStorage.setItem(key, JSON.stringify(next));
+      return { ok: true, item };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  },
+  async deleteItem(key, id) {
+    if (!DATA_KEYS[key] || !id || id === "all") {
+      return { ok: false, error: new Error("削除先が不正です") };
+    }
+    try {
+      const next = storedArray(window.localStorage.getItem(key), { strict: true }).filter(item => item?.id !== id);
+      window.localStorage.setItem(key, JSON.stringify(next));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  },
+  subscribe() { return () => {}; }
 };
 
 function reportSync(status, error) {
@@ -145,11 +170,10 @@ async function readChunks(target, chunkCount, revision) {
   return chunks.map(chunk => chunk.data).join("");
 }
 
-async function payloadFromSnapshot(snapshot, { allowChunks = false } = {}) {
+async function payloadFromSnapshot(snapshot) {
   const data = snapshot.data();
   if (typeof data.payload === "string") return JSON.parse(data.payload);
   if (data.chunkCount > 0) {
-    if (!allowChunks) throw new Error("旧形式のchunk投稿は一覧読み込みではスキップしました");
     return JSON.parse(await readChunks(snapshot.ref, data.chunkCount, data.revision));
   }
   return null;
@@ -273,24 +297,14 @@ async function migrateLegacyFirestore(user) {
   const task = (async () => {
     const marker = doc(db, "users", user.uid, "meta", "migration");
     const markerSnapshot = await getDocFromServer(marker);
-    if (markerSnapshot.data()?.individualDocumentsV1) {
+    if (markerSnapshot.data()?.legacyRecoveryV2) {
       migratedUsers.add(user.uid);
       return;
     }
 
-    // すでに個別ドキュメントがあれば、重い旧形式データを起動時に再移行しない。
-    // 旧画像の失敗が、正常な新データの読み込みまで止めることを防ぐ。
-    const existingEntries = await getDocsFromServer(query(collectionRef(user.uid, "nb.entries"), limit(1)));
-    if (!existingEntries.empty) {
-      await setDoc(marker, {
-        individualDocumentsV1: true, importedAt: serverTimestamp(), clientId: getClientId(), skippedLegacyImport: true
-      }, { merge: true });
-      syncLog("legacy-migration-skipped", { userId: user.uid, reason: "modern-documents-exist" });
-      migratedUsers.add(user.uid);
-      return;
-    }
-
-    // ブラウザー/PWAのlocalStorageは移行元にしない。旧Firestoreデータだけを一度だけ取り込む。
+    // V1が途中で止まったユーザーも含め、旧Firestoreに残る配列を不足分だけ再統合する。
+    // safelyWriteItemが更新日時を比較するため、現在の個別ドキュメントを古い内容で上書きしない。
+    const failures = [];
     for (const key of Object.keys(DATA_KEYS)) {
       try {
         const raw = await readLegacyValue(user.uid, key);
@@ -300,22 +314,38 @@ async function migrateLegacyFirestore(user) {
           for (const value of values) await safelyWriteItem(user.uid, key, value, { migration: true, uploadImages: false });
         }
       } catch (error) {
+        failures.push({ key, message: error.message });
         syncLog("legacy-migration-invalid", { userId: user.uid, key, message: error.message });
       }
     }
     for (const key of PREFERENCE_KEYS) {
       try {
+        // 現行設定があれば、旧設定では巻き戻さない。
+        const current = await getDocFromServer(preferenceRef(user.uid, key));
+        if (current.exists()) continue;
         const raw = await readLegacyValue(user.uid, key);
         if (raw != null) await safelyWritePreference(user.uid, key, raw);
       } catch (error) {
+        failures.push({ key, message: error.message });
         syncLog("legacy-preference-migration-failed", { userId: user.uid, key, message: error.message });
       }
     }
-    await setDoc(marker, {
-      individualDocumentsV1: true, importedAt: serverTimestamp(), clientId: getClientId()
+    const completed = failures.length === 0;
+    await setDoc(marker, completed ? {
+      individualDocumentsV1: true,
+      legacyRecoveryV2: true,
+      recoveryImportedAt: serverTimestamp(),
+      recoveryFailures: deleteField(),
+      clientId: getClientId()
+    } : {
+      recoveryLastAttemptAt: serverTimestamp(),
+      recoveryFailures: failures,
+      clientId: getClientId()
     }, { merge: true });
     migratedUsers.add(user.uid);
-    syncLog("legacy-migration-complete", { userId: user.uid });
+    syncLog(completed ? "legacy-recovery-complete" : "legacy-recovery-incomplete", {
+      userId: user.uid, failures
+    });
   })();
   migrations.set(user.uid, task);
   try { await task; } finally { migrations.delete(user.uid); }
@@ -377,10 +407,8 @@ function createFirebaseStorageAdapter() {
   }
 
   async function loadItemsFromServer(user, key, { initial = false } = {}) {
-    const source = key === "nb.entries"
-      ? query(collectionRef(user.uid, key), orderBy("clientUpdatedAt", "desc"), limit(INITIAL_ENTRY_LIMIT))
-      : collectionRef(user.uid, key);
-    const snapshots = await getDocsFromServer(source);
+    // 一覧・検索・カレンダーが全履歴を前提にしているため、100件で打ち切らず全件を復元する。
+    const snapshots = await getDocsFromServer(collectionRef(user.uid, key));
     return mergeItemSnapshots(user, key, snapshots.docs, { initial });
   }
 
@@ -491,7 +519,7 @@ function createFirebaseStorageAdapter() {
     async saveItem(key, item) {
       try {
         const user = await getFirebaseUser();
-        if (user.isAnonymous) return { ok: true };
+        if (user.isAnonymous) return localStorageAdapter.saveItem(key, item);
         if (!DATA_KEYS[key]) return { ok: false, error: new Error("保存先が不正です") };
         const result = await safelyWriteItem(user.uid, key, item);
         if (!result.accepted) {
@@ -520,7 +548,7 @@ function createFirebaseStorageAdapter() {
     async deleteItem(key, id) {
       try {
         const user = await getFirebaseUser();
-        if (user.isAnonymous) return { ok: true };
+        if (user.isAnonymous) return localStorageAdapter.deleteItem(key, id);
         const accepted = await safelyDeleteItem(user.uid, key, id);
         if (!accepted) return { ok: false, error: new Error("この記録は別の端末で更新されています") };
         knownFor(user.uid, key).set(id, { id, deleted: true, clientUpdatedAt: Date.now() });
@@ -552,24 +580,65 @@ async function createNativeStorageAdapter() {
     const status = await LoofCloud.isAvailable();
     if (!status.available) return localStorageAdapter;
   } catch (_) { return localStorageAdapter; }
-  return {
-    async get(key) {
-      try {
-        const result = await LoofCloud.get({ key });
-        if (result?.value == null) return localStorageAdapter.get(key);
-        return { value: result.value };
-      } catch (_) { return localStorageAdapter.get(key); }
-    },
-    async set(key, value) {
+  let mutationQueue = Promise.resolve();
+
+  async function readNativeValue(key, { fallbackOnError = true } = {}) {
+    try {
+      const result = await LoofCloud.get({ key });
+      if (result?.value == null) {
+        const local = await localStorageAdapter.get(key);
+        // 初回CloudKit利用時は、端末に残る既存データをクラウドへ引き継ぐ。
+        if (local?.value != null) {
+          try { await LoofCloud.set({ key, value: local.value }); } catch (_) {}
+        }
+        return local;
+      }
+      await localStorageAdapter.set(key, result.value);
+      return { value: result.value };
+    } catch (error) {
+      if (fallbackOnError) return localStorageAdapter.get(key);
+      throw error;
+    }
+  }
+
+  function mutateItems(key, mutation, item) {
+    const task = mutationQueue.catch(() => {}).then(async () => {
+      if (!DATA_KEYS[key]) throw new Error("保存先が不正です");
+      // 読み込みに失敗した場合は古い端末キャッシュでCloudKitを上書きせず、保存自体を失敗させる。
+      const current = await readNativeValue(key, { fallbackOnError: false });
+      const next = mutation(storedArray(current?.value, { strict: true }));
+      const value = JSON.stringify(next);
+      // CloudKitへの保存が確定してからローカルキャッシュとUIを更新する。
+      await LoofCloud.set({ key, value });
       await localStorageAdapter.set(key, value);
-      try { await LoofCloud.set({ key, value }); } catch (_) {}
+      return item ? { ok: true, item } : { ok: true };
+    });
+    mutationQueue = task.then(() => undefined, () => undefined);
+    return task.catch(error => ({ ok: false, error }));
+  }
+
+  return {
+    get: readNativeValue,
+    async set(key, value) {
+      if (key === "nb.auth") {
+        await localStorageAdapter.set(key, value);
+        return;
+      }
+      await LoofCloud.set({ key, value });
+      await localStorageAdapter.set(key, value);
     },
     async delete(key) {
       await localStorageAdapter.delete(key);
       try { await LoofCloud.delete({ key }); } catch (_) {}
     },
-    async saveItem() { return { ok: true }; },
-    async deleteItem() {},
+    async saveItem(key, item) {
+      if (!item?.id || item.isAll) return { ok: false, error: new Error("保存内容が不正です") };
+      return mutateItems(key, values => upsertStoredItem(values, item), item);
+    },
+    async deleteItem(key, id) {
+      if (!id || id === "all") return { ok: false, error: new Error("削除内容が不正です") };
+      return mutateItems(key, values => values.filter(item => item?.id !== id));
+    },
     subscribe() { return () => {}; }
   };
 }
