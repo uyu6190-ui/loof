@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import {
   addDoc, collection, deleteField, doc, getDocFromServer, getDocsFromServer,
-  onSnapshot, runTransaction, serverTimestamp, setDoc, writeBatch
+  limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, writeBatch
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { db, getFirebaseUser, mediaStorage } from "./firebase.js";
@@ -15,8 +15,12 @@ const PREFERENCE_KEYS = new Set(["nb.current", "nb.icloud"]);
 // Firestoreは1ドキュメント1MiB・1バッチ10MiBまで。複数画像でも余裕を持たせる。
 const CHUNK_SIZE = 400_000;
 const CHUNKS_PER_BATCH = 8;
+const INITIAL_ENTRY_LIMIT = 100;
+const ENABLE_REALTIME_SNAPSHOTS = false;
+const ENABLE_FIRESTORE_AUDIT_LOGS = false;
 const LoofCloud = registerPlugin("LoofCloud");
 const migrations = new Map();
+const migratedUsers = new Set();
 
 const localStorageAdapter = {
   async get(key) {
@@ -53,6 +57,7 @@ function syncLog(event, detail = {}) {
 // 端末をまたいで原因を追えるよう、実際の変更・拒否だけはFirestoreにも残す。
 // 読み込みイベントは大量になるためConsoleのみとする。
 async function writeAuditLog(userId, event, detail) {
+  if (!ENABLE_FIRESTORE_AUDIT_LOGS) return;
   try {
     await addDoc(collection(db, "users", userId, "syncLogs"), {
       event, clientId: getClientId(), occurredAt: serverTimestamp(), ...detail
@@ -140,10 +145,13 @@ async function readChunks(target, chunkCount, revision) {
   return chunks.map(chunk => chunk.data).join("");
 }
 
-async function payloadFromSnapshot(snapshot) {
+async function payloadFromSnapshot(snapshot, { allowChunks = false } = {}) {
   const data = snapshot.data();
   if (typeof data.payload === "string") return JSON.parse(data.payload);
-  if (data.chunkCount > 0) return JSON.parse(await readChunks(snapshot.ref, data.chunkCount, data.revision));
+  if (data.chunkCount > 0) {
+    if (!allowChunks) throw new Error("旧形式のchunk投稿は一覧読み込みではスキップしました");
+    return JSON.parse(await readChunks(snapshot.ref, data.chunkCount, data.revision));
+  }
   return null;
 }
 
@@ -260,20 +268,25 @@ async function safelyWritePreference(userId, key, value) {
 
 async function migrateLegacyFirestore(user) {
   if (user.isAnonymous) return;
+  if (migratedUsers.has(user.uid)) return;
   if (migrations.has(user.uid)) return migrations.get(user.uid);
   const task = (async () => {
     const marker = doc(db, "users", user.uid, "meta", "migration");
     const markerSnapshot = await getDocFromServer(marker);
-    if (markerSnapshot.data()?.individualDocumentsV1) return;
+    if (markerSnapshot.data()?.individualDocumentsV1) {
+      migratedUsers.add(user.uid);
+      return;
+    }
 
     // すでに個別ドキュメントがあれば、重い旧形式データを起動時に再移行しない。
     // 旧画像の失敗が、正常な新データの読み込みまで止めることを防ぐ。
-    const existingEntries = await getDocsFromServer(collectionRef(user.uid, "nb.entries"));
+    const existingEntries = await getDocsFromServer(query(collectionRef(user.uid, "nb.entries"), limit(1)));
     if (!existingEntries.empty) {
       await setDoc(marker, {
         individualDocumentsV1: true, importedAt: serverTimestamp(), clientId: getClientId(), skippedLegacyImport: true
       }, { merge: true });
       syncLog("legacy-migration-skipped", { userId: user.uid, reason: "modern-documents-exist" });
+      migratedUsers.add(user.uid);
       return;
     }
 
@@ -301,6 +314,7 @@ async function migrateLegacyFirestore(user) {
     await setDoc(marker, {
       individualDocumentsV1: true, importedAt: serverTimestamp(), clientId: getClientId()
     }, { merge: true });
+    migratedUsers.add(user.uid);
     syncLog("legacy-migration-complete", { userId: user.uid });
   })();
   migrations.set(user.uid, task);
@@ -363,7 +377,10 @@ function createFirebaseStorageAdapter() {
   }
 
   async function loadItemsFromServer(user, key, { initial = false } = {}) {
-    const snapshots = await getDocsFromServer(collectionRef(user.uid, key));
+    const source = key === "nb.entries"
+      ? query(collectionRef(user.uid, key), orderBy("clientUpdatedAt", "desc"), limit(INITIAL_ENTRY_LIMIT))
+      : collectionRef(user.uid, key);
+    const snapshots = await getDocsFromServer(source);
     return mergeItemSnapshots(user, key, snapshots.docs, { initial });
   }
 
@@ -373,6 +390,7 @@ function createFirebaseStorageAdapter() {
   }
 
   function watch(user, key) {
+    if (!ENABLE_REALTIME_SNAPSHOTS) return;
     if (user.isAnonymous || watchers.has(`${user.uid}:${key}`)) return;
     const id = `${user.uid}:${key}`;
     const target = DATA_KEYS[key] ? collectionRef(user.uid, key) : preferenceRef(user.uid, key);
@@ -402,7 +420,17 @@ function createFirebaseStorageAdapter() {
       reportSync("error", error);
       syncLog("snapshot-error", { userId: user.uid, key, message: error.message });
     });
-    watchers.set(id, unsubscribe);
+    watchers.set(id, { unsubscribe, userId: user.uid, key });
+  }
+
+  function releaseWatchersForKey(key) {
+    for (const [id, watcher] of watchers.entries()) {
+      if (watcher.key !== key) continue;
+      watcher.unsubscribe?.();
+      watchers.delete(id);
+      refreshQueues.delete(id);
+      syncLog("snapshot-unsubscribed", { userId: watcher.userId, key });
+    }
   }
 
   return {
@@ -428,8 +456,9 @@ function createFirebaseStorageAdapter() {
     },
     async set(key, value) {
       await localStorageAdapter.set(key, value);
+      if (key === "nb.auth") return;
       const user = await getFirebaseUser();
-      if (user.isAnonymous || key === "nb.auth") return;
+      if (user.isAnonymous) return;
       if (PREFERENCE_KEYS.has(key)) {
         await safelyWritePreference(user.uid, key, value);
         reportSync("connected");
@@ -509,7 +538,10 @@ function createFirebaseStorageAdapter() {
       listeners.set(key, set);
       return () => {
         set.delete(listener);
-        if (set.size === 0) listeners.delete(key);
+        if (set.size === 0) {
+          listeners.delete(key);
+          releaseWatchersForKey(key);
+        }
       };
     }
   };

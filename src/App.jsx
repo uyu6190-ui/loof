@@ -20,9 +20,9 @@ const LINE2 = "#F3F3F4";
 /* X (Twitter) palette for faithful post rendering */
 const TXT = "#0F1419";   // primary text
 const MUT = "#536471";   // secondary (handle, time, icons)
-const LK  = "#0F1419";   // like (mono)
-const RTC = "#0F1419";   // repost (mono)
-const BL  = "#0F1419";   // accent (mono)
+const LK  = "#F91880";   // X like
+const RTC = "#00BA7C";   // X repost
+const BL  = "#1D9BF0";   // X accent
 const COVERBG = "#E4E4E6"; // neutral grey cover
 const BRD2 = "#D6D6DB";    // neutral border
 const RED = "#F4212E";     // destructive
@@ -30,40 +30,41 @@ const RED = "#F4212E";     // destructive
 const DEFAULT_AVATAR = "data:image/jpeg;base64,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";
 
 /* ---------- persisted storage (artifact window.storage) ---------- */
-function usePersisted(key, init) {
+function usePersisted(key, init, { autoSave = false, enabled = true } = {}) {
   const [val, setVal] = useState(init);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
   const writeQueue = useRef(Promise.resolve());
   useEffect(() => {
+    if (!enabled) return undefined;
     let alive = true;
     (async () => {
-      let failed = false;
       try {
         if (window.storage) {
           const r = await window.storage.get(key);
           if (alive && r?.value != null) setVal(JSON.parse(r.value));
         }
       } catch (error) {
-        failed = true;
         if (alive) setError(error);
       }
-      if (alive && !failed) setLoaded(true);
+      // 読み込み失敗でも待機状態は終える。Google利用時は接続エラー画面へ、
+      // ゲスト利用時は端末内の空データから起動できるようにする。
+      if (alive) setLoaded(true);
     })();
     return () => { alive = false; };
-  }, [key]);
+  }, [key, enabled]);
   useEffect(() => {
-    if (!window.storage?.subscribe) return undefined;
+    if (!enabled || !window.storage?.subscribe) return undefined;
     return window.storage.subscribe(key, (value) => {
       try {
         setVal((previous) => JSON.stringify(previous) === value ? previous : JSON.parse(value));
       } catch (_) {}
     });
-  }, [key]);
+  }, [key, enabled]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!enabled || !autoSave || !loaded) return;
     const serialized = JSON.stringify(val);
-    // 状態更新を順番に送る。初回復元・連続編集・Firestore通知が書き込み順を崩さないようにする。
+    // Firestoreデータは自動保存しない。ログイン状態など端末ローカルだけ必要なものに限定する。
     writeQueue.current = writeQueue.current.catch(() => {}).then(async () => {
       try {
         if (window.storage) await window.storage.set(key, serialized);
@@ -76,7 +77,7 @@ function usePersisted(key, init) {
         }));
       }
     });
-  }, [key, val, loaded]);
+  }, [key, val, loaded, autoSave, enabled]);
   return [val, setVal, loaded, error];
 }
 
@@ -203,28 +204,21 @@ export default function App() {
   const [entries, setEntries, entriesLoaded, entriesError] = usePersisted("nb.entries", []);
   const [currentId, setCurrentId, currentLoaded, currentError] = usePersisted("nb.current", "");
 
-  // seed default accounts on first run
-  useEffect(() => {
-    // 現在選択中のノートもサーバーから復元してから初期値を決める。
-    if (!accLoaded || !currentLoaded) return;
-    if (accounts.length === 0) {
-      const seeded = SEED_ACCOUNTS.map(s => ({ ...newAccount(s.name), bio: s.bio }));
-      setAccounts([makeAll(), ...seeded]);
-      setCurrentId(seeded[0].id);
-      return;
-    }
-    if (!accounts.find(a => a.isAll)) {
-      setAccounts(as => [makeAll(), ...as.filter(a => !a.isAll)]);
-    }
-    if (!accounts.find(a => a.id === currentId)) {
-      setCurrentId((accounts.find(a => !a.isAll) || accounts[0]).id);
-    }
-  }, [accLoaded, currentLoaded]); // eslint-disable-line
-
   const [view, setView] = useState("timeline"); // timeline | compose | accounts
   const [editId, setEditId] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [cpFor, setCpFor] = useState(null); // entry to add to a commonplace
+  const [dayView, setDayView] = useState(null); // {date}
+  const [secondaryLoad, setSecondaryLoad] = useState(false);
+  const primaryLoaded = accLoaded && entriesLoaded;
+  const secondaryEnabled = secondaryLoad || view === "commonplace" || Boolean(cpFor);
+  const [collections, setCollections, collectionsLoaded, collectionsError] = usePersisted("nb.collections", [], { enabled: secondaryEnabled });
+  const [icloud, setIcloud, icloudLoaded, icloudError] = usePersisted("nb.icloud", false, { enabled: secondaryLoad || view === "about" });
 
-  const account = accounts.find(a => a.id === currentId) || null;
+  const account = accounts.find(a => a.id === currentId)
+    || accounts.find(a => !a.isAll)
+    || accounts[0]
+    || null;
   const accEntries = useMemo(
     () => (account?.isAll ? [...entries] : entries.filter(e => e.accountId === currentId))
       .sort((a, b) => a.createdAt < b.createdAt ? 1 : -1),
@@ -255,14 +249,9 @@ export default function App() {
     if (!entry) return false;
     return upsert({ ...entry, ...p, updatedAt: new Date().toISOString() });
   }, [entries, upsert]);
-  const [draft, setDraft] = useState(null);
-  const [collections, setCollections, collectionsLoaded, collectionsError] = usePersisted("nb.collections", []);
-  const [cpFor, setCpFor] = useState(null); // entry to add to a commonplace
-  const [dayView, setDayView] = useState(null); // {date}
-  const [icloud, setIcloud, icloudLoaded, icloudError] = usePersisted("nb.icloud", false);
   const [aboutBack, setAboutBack] = useState("accounts");
   const openAbout = (from) => { setAboutBack(from); setView("about"); };
-  const [auth, setAuth] = usePersisted("nb.auth", null);
+  const [auth, setAuth] = usePersisted("nb.auth", null, { autoSave: true });
   const [firebaseUser, setFirebaseUser] = useState(undefined);
   const [authBusy, setAuthBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState("loading");
@@ -277,6 +266,58 @@ export default function App() {
     window.addEventListener("loof:sync-status", onStatus);
     return () => window.removeEventListener("loof:sync-status", onStatus);
   }, []);
+  useEffect(() => {
+    if (!primaryLoaded) return undefined;
+    const timer = window.setTimeout(() => setSecondaryLoad(true), 1200);
+    return () => window.clearTimeout(timer);
+  }, [primaryLoaded]);
+  const saveStoredItem = useCallback(async (key, item) => {
+    const result = await window.storage?.saveItem?.(key, item);
+    if (result && !result.ok) return { ok: false, item, error: result.error };
+    return { ok: true, item: result?.item || item };
+  }, []);
+  const saveStoredPreference = useCallback(async (key, value) => {
+    try {
+      await window.storage?.set?.(key, JSON.stringify(value));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }, []);
+  const setCurrentIdPersisted = useCallback((next) => {
+    setCurrentId(previous => {
+      const resolved = typeof next === "function" ? next(previous) : next;
+      void saveStoredPreference("nb.current", resolved);
+      return resolved;
+    });
+  }, [saveStoredPreference, setCurrentId]);
+  const setIcloudPersisted = useCallback((next) => {
+    setIcloud(previous => {
+      const resolved = typeof next === "function" ? next(previous) : next;
+      void saveStoredPreference("nb.icloud", resolved);
+      return resolved;
+    });
+  }, [saveStoredPreference, setIcloud]);
+
+  // seed default accounts on first run
+  useEffect(() => {
+    // 起動を止めないため、現在選択中のノート設定は後から来てもよい。
+    if (!accLoaded) return;
+    if (accounts.length === 0) {
+      const seeded = SEED_ACCOUNTS.map(s => ({ ...newAccount(s.name), bio: s.bio }));
+      setAccounts([makeAll(), ...seeded]);
+      seeded.forEach(account => { void saveStoredItem("nb.accounts", account); });
+      setCurrentIdPersisted(seeded[0].id);
+      return;
+    }
+    if (!accounts.find(a => a.isAll)) {
+      setAccounts(as => [makeAll(), ...as.filter(a => !a.isAll)]);
+    }
+    if (currentLoaded && !accounts.find(a => a.id === currentId)) {
+      setCurrentIdPersisted((accounts.find(a => !a.isAll) || accounts[0]).id);
+    }
+  }, [accLoaded, currentLoaded]); // eslint-disable-line
+
   useEffect(() => {
     if (!firebaseUser) return;
     // Googleの認証状態を正とし、端末に残った過去のログイン状態は引き継がない。
@@ -342,11 +383,31 @@ export default function App() {
     setDraft({ ...newEntry(target), blocks: [{ id: uid(), type: "text", value: "" }, quoteBlockFrom(entry, acc)] });
     setEditId(null); setView("compose");
   };
-  const saveAccount = (acc) => setAccounts(as => as.map(a => a.id === acc.id ? { ...a, ...acc, updatedAt: new Date().toISOString() } : a));
+  const saveAccount = async (acc) => {
+    const next = { ...acc, updatedAt: new Date().toISOString() };
+    const result = await saveStoredItem("nb.accounts", next);
+    if (!result.ok) {
+      await askAlert("プロフィールを保存できませんでした。接続を確認してもう一度お試しください。");
+      return false;
+    }
+    const stored = result.item;
+    setAccounts(as => as.map(a => a.id === stored.id ? { ...a, ...stored } : a));
+    return true;
+  };
   const addToCollection = (colId, entryId) =>
-    setCollections(cs => cs.map(c => c.id === colId ? { ...c, itemIds: [...new Set([...(c.itemIds || []), entryId])], updatedAt: new Date().toISOString() } : c));
+    setCollections(cs => {
+      let changed = null;
+      const next = cs.map(c => {
+        if (c.id !== colId) return c;
+        changed = { ...c, itemIds: [...new Set([...(c.itemIds || []), entryId])], updatedAt: new Date().toISOString() };
+        return changed;
+      });
+      if (changed) void saveStoredItem("nb.collections", changed);
+      return next;
+    });
   const createCollection = (name, query = "") => {
     const c = { id: uid(), name: name.trim() || "コモンプレイス", query: query.trim(), itemIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    void saveStoredItem("nb.collections", c);
     setCollections(cs => [c, ...cs]); return c;
   };
 
@@ -354,7 +415,8 @@ export default function App() {
 
   // Firestoreの読み込み完了ではなく、Firebase Authenticationの実際の状態で判断する。
   const loggedInWithGoogle = isGoogleUser(firebaseUser);
-  const usingGuestMode = firebaseUser?.isAnonymous && auth?.mode === "guest";
+  // 匿名認証がオフラインで失敗しても、明示的に選んだゲストモードは端末保存で開ける。
+  const usingGuestMode = auth?.mode === "guest" && !loggedInWithGoogle;
   if (!loggedInWithGoogle && !usingGuestMode) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
@@ -367,7 +429,7 @@ export default function App() {
     </div>
   );
 
-  const initialLoadError = accountsError || entriesError || currentError || collectionsError || icloudError;
+  const initialLoadError = accountsError || entriesError;
   if (loggedInWithGoogle && initialLoadError) return (
     <div style={S.root} className="root">
       <style>{CSS}</style>
@@ -380,7 +442,7 @@ export default function App() {
     </div>
   );
 
-  const dataReady = accLoaded && entriesLoaded && currentLoaded && collectionsLoaded && icloudLoaded;
+  const dataReady = primaryLoaded;
   // entries の初回サーバー読み込みが終わる前に編集できると、遅れて届いた初期一覧が新規投稿を戻してしまう。
   if (!dataReady || !account) return <div style={S.root}><style>{CSS}</style><ConfirmHost /><div style={{padding:40,color:SUB}}>Firestoreから記録を復元中…</div></div>;
 
@@ -389,6 +451,16 @@ export default function App() {
       <style>{CSS}</style>
       <ConfirmHost />
       {loggedInWithGoogle && <div className="syncPill">{syncStatus === "connected" ? "☁ Firestore 同期中" : "☁ Firestore に接続中…"}</div>}
+
+      <Navigation
+        account={account}
+        view={view}
+        onTimeline={() => setView("timeline")}
+        onProfile={() => setView("profile")}
+        onCommonplace={() => setView("commonplace")}
+        onAccounts={() => setView("accounts")}
+        onCompose={startCompose}
+      />
 
       <div className="mainCol">
       {view === "timeline" && (
@@ -430,7 +502,7 @@ export default function App() {
       {view === "accounts" && (
         <Accounts
           accounts={accounts} setAccounts={setAccounts}
-          currentId={currentId} setCurrentId={setCurrentId}
+          currentId={currentId} setCurrentId={setCurrentIdPersisted}
           entries={entries} setEntries={setEntries}
           onProfile={() => setView("profile")}
           onAbout={() => openAbout("accounts")}
@@ -439,7 +511,7 @@ export default function App() {
       )}
 
       {view === "about" && (
-        <About icloud={icloud} setIcloud={setIcloud} user={firebaseUser} onGoogle={beginGoogle} onLogout={logout} busy={authBusy} onClose={() => setView(aboutBack)} />
+        <About icloud={icloud} setIcloud={setIcloudPersisted} user={firebaseUser} onGoogle={beginGoogle} onLogout={logout} busy={authBusy} onClose={() => setView(aboutBack)} />
       )}
 
       {view === "profile" && (
@@ -466,7 +538,17 @@ export default function App() {
       )}
       </div>
 
-      <Sidebar entries={account?.isAll ? entries : entries.filter(e => e.accountId === currentId)} allEntries={entries} onOpenEntry={openEntry} />
+      <Sidebar account={account} entries={account?.isAll ? entries : entries.filter(e => e.accountId === currentId)} allEntries={entries} onOpenEntry={openEntry} />
+
+      {view !== "compose" && (
+        <MobileNavigation
+          view={view}
+          onTimeline={() => setView("timeline")}
+          onProfile={() => setView("profile")}
+          onCommonplace={() => setView("commonplace")}
+          onAccounts={() => setView("accounts")}
+        />
+      )}
 
       {dayView && (
         <DayView
@@ -516,14 +598,19 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
     () => [...filtered].sort((a, b) => a.createdAt < b.createdAt ? 1 : -1),
     [filtered]
   );
+  const mediaCount = useMemo(() => entries.reduce((n, e) => n + e.blocks.filter(b => b.type === "image").length, 0), [entries]);
 
   return (
     <div className="screen">
       <header className="topbar">
-        <button className="avatarBtn" onClick={onProfile} aria-label="プロフィール"><Avatar account={account} size={32} /></button>
-        <button className="acctBtn" onClick={onSwitch}>
+        <button className="avatarBtn mobileOnly" onClick={onProfile} aria-label="プロフィール"><Avatar account={account} size={32} /></button>
+        <button className="acctBtn mobileOnly" onClick={onSwitch}>
           <span className="acctName">{accLabel(account)}</span>
           <Chevron />
+        </button>
+        <button className="timelineHeading desktopOnly" onClick={onSwitch}>
+          <span>{accLabel(account)}</span>
+          <small>{entries.length}件の記録</small>
         </button>
         <button className="iconBtn" onClick={onCommonplace} aria-label="コモンプレイス"><Layers /></button>
       </header>
@@ -539,22 +626,25 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
           {account.handle && <div className="tlProfHandle">@{account.handle}</div>}
           {account.bio && <div className="tlProfBio">{account.bio}</div>}
           <div className="tlProfJoined"><Cal /> {new Date(account.createdAt).getFullYear()}年{new Date(account.createdAt).getMonth() + 1}月から</div>
+          <div className="tlProfStats"><b>{entries.length}</b> ポスト <b>{mediaCount}</b> メディア</div>
         </div>
       </div>
+
+      <nav className="timelineTabs" aria-label="タイムライン表示">
+        <button className={!showAll ? "on" : ""} onClick={() => setShowAll(false)}><span>日ごと</span></button>
+        <button className={showAll ? "on" : ""} onClick={() => setShowAll(true)}><span>すべて</span></button>
+      </nav>
 
       <div className="searchWrap">
         <div className="search">
           <SearchIcon />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="このノートを検索" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="ポストを検索" aria-label="ポストを検索" />
           {q && <button className="clr" onClick={() => setQ("")}>✕</button>}
         </div>
         <label className="dateBtn" aria-label="日付で移動">
           <Cal />
           <input type="date" className="dateInput" onChange={e => { if (e.target.value) setJumpDate({ date: e.target.value, n: Date.now() }); }} />
         </label>
-        <button className={"allPostsBtn" + (showAll ? " on" : "")} onClick={() => setShowAll(v => !v)}>
-          {showAll ? "日付表示" : "すべて表示"}
-        </button>
       </div>
 
       {showAll ? (
@@ -591,7 +681,7 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
         <main className="feed">
           <div className="empty">
             <div className="emptyMark"><GhostMark size={40} /></div>
-            まだ何もありません。<br />右下の＋から書きはじめましょう。
+            まだ何もありません。<br />ポストボタンから書きはじめましょう。
           </div>
         </main>
       ) : (
@@ -729,7 +819,6 @@ function PostCard({ entry, account, onOpen, onPatch, onDelete, onQuote, onAddCom
             ? <button className="xTime asLink" onClick={e => { e.stopPropagation(); onOpenDay(entry.createdAt.slice(0, 10)); }}>{relShort(entry.createdAt)}</button>
             : <span className="xTime">{relShort(entry.createdAt)}</span>}
           <span className="xHeadRight" onClick={stop}>
-            <button className="xIcon"><SlashCircle /></button>
             <button className="xIcon" onClick={() => setMenu(menu === "kebab" ? null : "kebab")} aria-label="メニュー"><Dots /></button>
             {menu === "kebab" && (<>
               <div className="menuBackdrop" onClick={close} />
@@ -752,9 +841,9 @@ function PostCard({ entry, account, onOpen, onPatch, onDelete, onQuote, onAddCom
         </div>
 
         <div className="xActions" onClick={stop}>
-          <button className="xAct"><Comment /></button>
+          <button className="xAct comment" aria-label="返信"><Comment /></button>
           <div className="xActWrap">
-            <button className={"xAct" + (rt ? " rt" : "")} onClick={() => setMenu(menu === "rt" ? null : "rt")}>
+            <button className={"xAct" + (rt ? " rt" : "")} onClick={() => setMenu(menu === "rt" ? null : "rt")} aria-label="リポスト">
               <Retweet />{rt && <span className="xCnt">1</span>}
             </button>
             {menu === "rt" && (<>
@@ -767,15 +856,15 @@ function PostCard({ entry, account, onOpen, onPatch, onDelete, onQuote, onAddCom
               </div>
             </>)}
           </div>
-          <button className={"xAct" + (liked ? " like" : "")} onClick={() => onPatch(entry.id, { liked: !liked })}>
+          <button className={"xAct" + (liked ? " like" : "")} onClick={() => onPatch(entry.id, { liked: !liked })} aria-label="いいね">
             {liked ? <HeartFill /> : <Heart />}{liked && <span className="xCnt">1</span>}
           </button>
-          <button className="xAct"><Views /></button>
+          <button className="xAct views" aria-label="表示回数"><Views /></button>
           <span className="xSpacer" />
-          <button className={"xAct" + (booked ? " bm" : "")} onClick={() => onPatch(entry.id, { bookmarked: !booked })}>
+          <button className={"xAct" + (booked ? " bm" : "")} onClick={() => onPatch(entry.id, { bookmarked: !booked })} aria-label="ブックマーク">
             {booked ? <BookmarkFill /> : <Bookmark />}
           </button>
-          <button className="xAct" onClick={() => copyText(entryPlainText(entry))}><Share /></button>
+          <button className="xAct share" onClick={() => copyText(entryPlainText(entry))} aria-label="共有"><Share /></button>
         </div>
       </div>
     </article>
@@ -794,6 +883,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
   const account = accounts.find(a => a.id === acctId) || accounts[0];
+  const canPost = blocks.some(b => b.type === "image" || b.type === "quote" || (b.type === "text" && b.value.trim()));
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(""), 1400); };
 
@@ -858,9 +948,9 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
   return (
     <div className="screen compose">
       <header className="topbar compTop">
-        <button className="txtbtn" onClick={onCancel}>とじる</button>
+        <button className="txtbtn composeCancel" onClick={onCancel}>キャンセル</button>
         <span style={{ flex: 1 }} />
-        <button className="postBtn" disabled={saving} onClick={save}>{saving ? "保存中…" : "保存"}</button>
+        <button className="postBtn" disabled={saving || !canPost} onClick={save}>{saving ? "送信中…" : "ポスト"}</button>
       </header>
 
       <main className="editor" onPaste={handlePaste}>
@@ -877,7 +967,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
               <AutoTextarea
                 key={b.id}
                 value={b.value}
-                placeholder={i === 0 ? "いま思っていること、今日のこと、英文…" : "つづきを書く…"}
+                placeholder={i === 0 ? "いまどうしてる？" : "つづきを書く…"}
                 onChange={v => setText(b.id, v)}
                 onFocus={() => setFocusIdx(i)}
               />
@@ -965,15 +1055,22 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
 
   const pick = (id) => { setCurrentId(id); onClose(); };
 
-  const save = (acc) => {
+  const save = async (acc) => {
     const next = { ...acc, updatedAt: new Date().toISOString() };
+    const result = await window.storage?.saveItem?.("nb.accounts", next);
+    if (result && !result.ok) {
+      await askAlert("ノートを保存できませんでした。接続を確認してもう一度お試しください。");
+      return false;
+    }
+    const stored = result?.item || next;
     setAccounts(as => {
-      const i = as.findIndex(a => a.id === next.id);
-      if (i === -1) return [...as, next];
-      const c = as.slice(); c[i] = next; return c;
+      const i = as.findIndex(a => a.id === stored.id);
+      if (i === -1) return [...as, stored];
+      const c = as.slice(); c[i] = stored; return c;
     });
     if (!accounts.find(a => a.id === acc.id)) setCurrentId(acc.id);
     setEditing(null);
+    return true;
   };
   const del = async (acc) => {
     if (acc.isAll) { await askAlert("統合ノート（すべての記録）は削除できません。"); return; }
@@ -1045,15 +1142,40 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
   const [icon, setIcon] = useState(account.icon || "");
   const [bio, setBio] = useState(account.bio || "");
   const [cover, setCover] = useState(account.cover || "");
-  const iconRef = useRef(null);
-  const coverRef = useRef(null);
+  const [saving, setSaving] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState("");
   const pickIcon = async (e) => {
     const f = e.target.files?.[0]; e.target.value = ""; if (!f) return;
-    try { const r = await compressImage(f, 300, 0.85); setIcon(r.src); } catch (_) {}
+    setImageBusy(true);
+    setImageError("");
+    try {
+      const r = await compressImage(f, 300, 0.85);
+      setIcon(r.src);
+    } catch (_) {
+      setImageError("画像を読み込めませんでした。別の画像を選んでください。");
+    } finally {
+      setImageBusy(false);
+    }
   };
   const pickCover = async (e) => {
     const f = e.target.files?.[0]; e.target.value = ""; if (!f) return;
-    try { const r = await compressImage(f, 1000, 0.8); setCover(r.src); } catch (_) {}
+    setImageBusy(true);
+    setImageError("");
+    try {
+      const r = await compressImage(f, 1000, 0.8);
+      setCover(r.src);
+    } catch (_) {
+      setImageError("画像を読み込めませんでした。別の画像を選んでください。");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+  const submit = async () => {
+    if (saving || imageBusy) return;
+    setSaving(true);
+    const ok = await onSave({ ...account, name: name.trim(), handle: handle.trim(), icon, bio, cover, _new: undefined });
+    if (ok === false) setSaving(false);
   };
   return (
     <div className="overlay" onClick={onClose}>
@@ -1061,17 +1183,18 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
         <div className="grab" />
         <div className="sheetTitle">{isNew ? "新しいノート" : "プロフィールを編集"}</div>
         <div className="sheetBody">
-          <button className="coverPick" onClick={() => coverRef.current?.click()} style={cover ? { backgroundImage: `url(${cover})` } : null}>
+          <label className="coverPick" style={cover ? { backgroundImage: `url(${cover})` } : null} aria-label="ヘッダー画像を変更">
             {!cover && <span className="coverHint">＋ ヘッダー画像</span>}
-          </button>
-          <input ref={coverRef} type="file" accept="image/*" style={{ display: "none" }} onChange={pickCover} />
+            <input className="filePick" type="file" accept="image/*" onChange={pickCover} />
+          </label>
           <div className="iconPick">
-            <button className="iconPreview" onClick={() => iconRef.current?.click()}>
+            <label className="iconPreview" aria-label="アイコン画像を変更">
               <Avatar account={{ name, icon }} size={72} />
               <span className="iconEdit">変更</span>
-            </button>
-            <input ref={iconRef} type="file" accept="image/*" style={{ display: "none" }} onChange={pickIcon} />
-            {(icon || cover) && <button className="txtbtn" onClick={() => { setIcon(""); setCover(""); }}>画像をリセット</button>}
+              <input className="filePick" type="file" accept="image/*" onChange={pickIcon} />
+            </label>
+            {(icon || cover) && <button className="txtbtn" type="button" disabled={imageBusy} onClick={() => { setIcon(""); setCover(""); }}>画像をリセット</button>}
+            {imageError && <div className="imageError" role="alert">{imageError}</div>}
           </div>
           <label className="fieldLabel">名前（空欄でもOK）</label>
           <input className="field" value={name} onChange={e => setName(e.target.value)} placeholder="あなたの名前（例：Teddy）" autoFocus={isNew} />
@@ -1082,8 +1205,8 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
           </div>
           <label className="fieldLabel">bio（カテゴリー・用途）</label>
           <textarea className="field" rows={4} value={bio} onChange={e => setBio(e.target.value)} placeholder={"このノートのカテゴリーや用途を書きます。\n例）英語日記 / 創作 / IELTS 備忘録"} style={{ lineHeight: 1.6, resize: "none" }} />
-          <button className="primary" disabled={!name.trim() && !bio.trim()} onClick={() => onSave({ ...account, name: name.trim(), handle: handle.trim(), icon, bio, cover, _new: undefined })}>
-            {isNew ? "作成する" : "保存する"}
+          <button className="primary" disabled={saving || imageBusy} onClick={submit}>
+            {imageBusy ? "画像を処理中…" : saving ? "保存中…" : (isNew ? "作成する" : "保存する")}
           </button>
           {onDelete && <button className="deleteLink" onClick={onDelete}>このノートを削除</button>}
         </div>
@@ -1129,7 +1252,7 @@ function Profile({ account, accounts, entries, onSave, onOpen, onAbout, onPatch,
           <div style={{ height: 60 }} />
         </div>
       </div>
-      {edit && <AccountSheet account={account} isNew={false} onSave={(a) => { onSave(a); setEdit(false); }} onDelete={null} onClose={() => setEdit(false)} />}
+      {edit && <AccountSheet account={account} isNew={false} onSave={async (a) => { if (await onSave(a)) setEdit(false); }} onDelete={null} onClose={() => setEdit(false)} />}
     </div>
   );
 }
@@ -1163,7 +1286,16 @@ function Commonplace({ accounts, entries, collections, setCollections, onCreate,
       setCollections(cs => cs.filter(x => x.id !== c.id)); setSel(null);
     }
   };
-  const removeItem = (c, id) => setCollections(cs => cs.map(x => x.id === c.id ? { ...x, itemIds: (x.itemIds || []).filter(i => i !== id), updatedAt: new Date().toISOString() } : x));
+  const removeItem = (c, id) => setCollections(cs => {
+    let changed = null;
+    const next = cs.map(x => {
+      if (x.id !== c.id) return x;
+      changed = { ...x, itemIds: (x.itemIds || []).filter(i => i !== id), updatedAt: new Date().toISOString() };
+      return changed;
+    });
+    if (changed) void window.storage?.saveItem?.("nb.collections", changed);
+    return next;
+  });
 
   if (sel) {
     const c = collections.find(x => x.id === sel);
@@ -1360,9 +1492,49 @@ function About({ icloud, setIcloud, user, onGoogle, onLogout, busy, onClose }) {
 }
 
 /* ============================================================
-   SIDEBAR — wide screens only: search + image gallery
+   APP NAVIGATION — X-style desktop rail + mobile tab bar
    ============================================================ */
-function Sidebar({ entries, allEntries, onOpenEntry }) {
+function Navigation({ account, view, onTimeline, onProfile, onCommonplace, onAccounts, onCompose }) {
+  return (
+    <aside className="leftNav" aria-label="メインナビゲーション">
+      <div className="leftNavInner">
+        <button className="brandMark" onClick={onTimeline} aria-label="Myposts ホーム"><GhostMark size={34} /></button>
+        <nav className="navLinks">
+          <NavButton label="ホーム" active={view === "timeline"} icon={<HomeIcon />} onClick={onTimeline} />
+          <NavButton label="プロフィール" active={view === "profile"} icon={<UserIcon />} onClick={onProfile} />
+          <NavButton label="コモンプレイス" active={view === "commonplace"} icon={<Layers />} onClick={onCommonplace} />
+          <NavButton label="ノート" active={view === "accounts"} icon={<NotebookIcon />} onClick={onAccounts} />
+        </nav>
+        <button className="navCompose" onClick={onCompose}><Pencil /><span>ポストする</span></button>
+        <button className="navAccount" onClick={onAccounts} aria-label="ノートを切り替え">
+          <Avatar account={account} size={42} />
+          <span className="navAccountText"><b>{accLabel(account)}</b><small>{account.handle ? `@${account.handle}` : "プライベート"}</small></span>
+          <Dots />
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function NavButton({ label, active, icon, onClick }) {
+  return <button className={"navButton" + (active ? " on" : "")} onClick={onClick}>{icon}<span>{label}</span></button>;
+}
+
+function MobileNavigation({ view, onTimeline, onProfile, onCommonplace, onAccounts }) {
+  return (
+    <nav className="mobileNav" aria-label="メインナビゲーション">
+      <button className={view === "timeline" ? "on" : ""} onClick={onTimeline} aria-label="ホーム"><HomeIcon /></button>
+      <button className={view === "profile" ? "on" : ""} onClick={onProfile} aria-label="プロフィール"><UserIcon /></button>
+      <button className={view === "commonplace" ? "on" : ""} onClick={onCommonplace} aria-label="コモンプレイス"><Layers /></button>
+      <button className={view === "accounts" ? "on" : ""} onClick={onAccounts} aria-label="ノート"><NotebookIcon /></button>
+    </nav>
+  );
+}
+
+/* ============================================================
+   SIDEBAR — wide screens only: search + notebook overview
+   ============================================================ */
+function Sidebar({ account, entries, allEntries, onOpenEntry }) {
   const [q, setQ] = useState("");
   const imgs = useMemo(() => {
     const k = q.trim().toLowerCase();
@@ -1373,21 +1545,31 @@ function Sidebar({ entries, allEntries, onOpenEntry }) {
     });
     return out;
   }, [entries, q]);
+  const liked = entries.filter(e => e.liked).length;
+  const saved = entries.filter(e => e.bookmarked).length;
   return (
     <aside className="sidebar">
       <div className="search sideSearch">
         <SearchIcon />
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="検索" />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="ポストを検索" aria-label="ポストを検索" />
         {q && <button className="clr" onClick={() => setQ("")}>✕</button>}
       </div>
+      <div className="sideCard sideOverview">
+        <div className="sideTitle">{accLabel(account)} の記録</div>
+        <div className="sideStat"><span>ポスト</span><b>{entries.length}</b></div>
+        <div className="sideStat"><span>いいね</span><b>{liked}</b></div>
+        <div className="sideStat"><span>ブックマーク</span><b>{saved}</b></div>
+        {account?.isAll && <div className="sideFoot">全ノート合計 {allEntries.length} 件</div>}
+      </div>
       <div className="sideCard">
-        <div className="sideTitle">これまでの画像</div>
+        <div className="sideTitle">メディア</div>
         {imgs.length === 0
-          ? <div className="sideEmpty">画像つきの記録がここに並びます。</div>
+          ? <div className="sideEmpty">画像つきのポストがここに並びます。</div>
           : <div className="imgGrid">{imgs.map((im, i) => (
               <button key={i} className="imgCell" onClick={() => onOpenEntry(im.id)} style={{ backgroundImage: `url(${im.src})` }} aria-label="記録を開く" />
             ))}</div>}
       </div>
+      <div className="sideLegal">Myposts · あなただけのタイムライン</div>
     </aside>
   );
 }
@@ -1474,26 +1656,29 @@ const Layers = () => <svg width="22" height="22" viewBox="0 0 24 24" {...stroke}
 const BookmarkPlus = () => <svg width="19" height="19" viewBox="0 0 24 24" {...stroke}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h6M17 3v6M14 6h6" /></svg>;
 const Cal = () => <svg width="15" height="15" viewBox="0 0 24 24" {...stroke} style={{ color: MUT }}><rect x="3.5" y="5" width="17" height="16" rx="2" /><path d="M3.5 9h17M8 3v4M16 3v4" /></svg>;
 const Info = () => <svg width="22" height="22" viewBox="0 0 24 24" {...stroke}><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><circle cx="12" cy="7.6" r="0.6" fill="currentColor" stroke="none" /></svg>;
+const HomeIcon = () => <svg width="25" height="25" viewBox="0 0 24 24" {...stroke}><path d="M3 11.5L12 3l9 8.5V21h-6v-6H9v6H3z" /></svg>;
+const UserIcon = () => <svg width="25" height="25" viewBox="0 0 24 24" {...stroke}><circle cx="12" cy="8" r="4" /><path d="M4.5 21c.7-4.1 3.2-6 7.5-6s6.8 1.9 7.5 6" /></svg>;
+const NotebookIcon = () => <svg width="25" height="25" viewBox="0 0 24 24" {...stroke}><path d="M5 3h13a2 2 0 0 1 2 2v16H7a3 3 0 0 1-3-3V4a1 1 0 0 1 1-1z" /><path d="M8 3v18M12 8h5" /></svg>;
 
 /* ============================================================ styles ============================================================ */
 const S = {
-  root: { position: "relative", minHeight: "100vh", background: BG, color: INK,
-    fontFamily: "'Noto Sans JP',-apple-system,'Hiragino Sans',sans-serif", letterSpacing: ".01em" },
+  root: { position: "relative", minHeight: "100vh", background: "#fff", color: INK,
+    fontFamily: "-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP','Segoe UI',sans-serif" },
 };
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800;900&display=swap');
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-body{margin:0;background:${BG};font-weight:600;}
+body{margin:0;background:#fff;font-weight:400;}
 html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;}
 button{font-family:inherit;cursor:pointer;font-weight:600;}
-input,textarea{font-family:inherit;font-weight:600;}
+input,textarea{font-family:inherit;font-weight:400;}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid ${BL};outline-offset:2px;}
 
-.screen{width:100%;max-width:none;margin:0;min-height:100vh;position:relative;display:flex;flex-direction:column;background:#fff;}
+.screen{width:100%;max-width:none;margin:0;min-height:100dvh;position:relative;display:flex;flex-direction:column;background:#fff;}
 
 /* top bar */
 .topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
-  padding:12px 16px;background:rgba(255,255,255,.86);backdrop-filter:blur(12px);border-bottom:1px solid ${LINE};min-height:58px;}
+  padding:0 16px;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid ${LINE};min-height:54px;}
 .topTitle{font-size:13px;letter-spacing:.1em;color:${SUB};}
 .acctBtn{display:flex;align-items:center;gap:10px;background:none;border:none;padding:4px 8px 4px 4px;border-radius:999px;color:${INK};}
 .acctBtn:active{background:${LINE};}
@@ -1504,19 +1689,21 @@ input,textarea{font-family:inherit;font-weight:600;}
 .iconBtn.sm{width:34px;height:34px;color:${SUB};}
 .txtbtn{background:none;border:none;color:${SUB};font-size:14px;padding:6px 4px;}
 .txtbtn.strong{color:${INK};font-weight:600;}
+.desktopOnly{display:none;}
 
 /* avatar */
 .avatar{border-radius:50%;overflow:hidden;display:inline-grid;place-items:center;flex-shrink:0;background:#fff;border:1px solid ${LINE};}
 .avatar.mono{background:${INK};color:#fff;font-weight:600;border:none;font-family:'Hina Mincho',serif;}
 
 /* search */
-.searchWrap{padding:10px 16px 4px;}
-.search{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid ${LINE};border-radius:13px;padding:9px 13px;}
+.searchWrap{padding:10px 16px;}
+.search{display:flex;align-items:center;gap:9px;background:#EFF3F4;border:1px solid transparent;border-radius:999px;padding:9px 14px;}
+.search:focus-within{background:#fff;border-color:${BL};}
 .search input{flex:1;border:none;outline:none;background:none;font-size:14px;color:${INK};}
 .search .clr{border:none;background:none;color:${FAINT};font-size:13px;}
 
 /* feed */
-.feed{flex:1;padding:8px 16px 0;background:#fff;}
+.feed{flex:1;padding:0;background:#fff;}
 .day{margin-top:16px;}
 .dayHead{display:flex;align-items:flex-end;justify-content:space-between;
   padding:0 2px 12px;margin-bottom:6px;border-bottom:1px solid ${LINE};}
@@ -1526,9 +1713,10 @@ input,textarea{font-family:inherit;font-weight:600;}
 .dayCopy:active{background:${LINE2};}
 
 .thread{position:relative;}
-.xpost{display:flex;gap:12px;padding:12px 16px 4px;border-bottom:1px solid ${LINE};cursor:pointer;
+.xpost{display:flex;gap:10px;padding:12px 16px 5px;border-bottom:1px solid ${LINE};cursor:pointer;
   font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP','Segoe UI',sans-serif;}
-.xpost:active{background:#F7F7F8;}
+.xpost:hover{background:rgba(0,0,0,.025);}
+.xpost:active{background:#F7F9F9;}
 .xAvatar{flex-shrink:0;padding-top:2px;}
 .xMain{flex:1;min-width:0;}
 .xHead{display:flex;align-items:center;gap:4px;margin-bottom:1px;}
@@ -1545,12 +1733,14 @@ input,textarea{font-family:inherit;font-weight:600;}
 .xText + .xText{margin-top:10px;}
 .xText.faint{color:${MUT};}
 .xImg{display:block;width:100%;border-radius:16px;border:1px solid ${LINE};margin:12px 0 0;}
-.xActions{display:flex;align-items:center;margin-top:6px;max-width:430px;color:${MUT};}
+.xActions{display:flex;align-items:center;margin-top:7px;max-width:430px;color:${MUT};}
 .xActWrap{position:relative;display:inline-flex;}
 .xAct{display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:${MUT};font-size:13px;font-weight:400;
   height:34px;padding:0 2px;min-width:34px;justify-content:flex-start;border-radius:999px;}
 .xAct svg{width:18px;height:18px;}
-.xAct:active{color:${BL};}
+.xAct:hover,.xAct:active{color:${BL};background:rgba(29,155,240,.1);}
+.xAct.rt:hover{color:${RTC};background:rgba(0,186,124,.1);}
+.xAct.like:hover{color:${LK};background:rgba(249,24,128,.1);}
 .xAct.like{color:${LK};}
 .xAct.rt{color:${RTC};}
 .xAct.bm{color:${BL};}
@@ -1607,8 +1797,8 @@ input,textarea{font-family:inherit;font-weight:600;}
 
 /* fab */
 .fab{position:fixed;right:max(20px,calc(50vw - 300px + 20px));bottom:26px;width:58px;height:58px;border-radius:50%;
-  background:${INK};color:#fff;border:none;display:grid;place-items:center;z-index:20;
-  box-shadow:0 8px 24px rgba(0,0,0,.18);}
+  background:${BL};color:#fff;border:none;display:grid;place-items:center;z-index:20;
+  box-shadow:0 8px 24px rgba(29,155,240,.3);}
 .fab:active{transform:scale(.94);}
 
 /* composer */
@@ -1682,9 +1872,11 @@ input,textarea{font-family:inherit;font-weight:600;}
 .sheetTitle{font-size:18px;font-weight:800;text-align:center;margin-bottom:18px;letter-spacing:.06em;}
 .sheetBody{padding:0 22px 34px;}
 .iconPick{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:22px;}
-.iconPreview{position:relative;background:none;border:none;padding:0;border-radius:50%;}
+.iconPreview{position:relative;background:none;border:none;padding:0;border-radius:50%;cursor:pointer;}
+.filePick{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}
 .iconEdit{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);background:${INK};color:#fff;
   font-size:10px;padding:3px 9px;border-radius:999px;letter-spacing:.04em;}
+.imageError{max-width:100%;color:${RED};font-size:12px;line-height:1.5;text-align:center;}
 .fieldLabel{display:block;font-size:11px;letter-spacing:.2em;color:${SUB};margin-bottom:8px;text-transform:uppercase;}
 .field{width:100%;border:1px solid ${LINE};border-radius:14px;padding:13px 15px;font-size:15px;outline:none;color:${INK};margin-bottom:20px;}
 .field:focus{border-color:${INK};}
@@ -1698,24 +1890,75 @@ input,textarea{font-family:inherit;font-weight:600;}
 @media (prefers-reduced-motion: reduce){*{animation:none!important;}}
 
 /* ===== wide / tablet-landscape layout ===== */
-.root{position:relative;}
-.mainCol{width:100%;}
+.root{position:relative;display:flex;justify-content:center;align-items:flex-start;}
+.mainCol{width:100%;min-width:0;}
+.leftNav{display:none;}
 .sidebar{display:none;}
-@media (max-width:999px){
-  .root,.mainCol,.screen{width:100%!important;max-width:100%!important;min-width:0!important;margin:0!important;padding-left:0!important;padding-right:0!important;}
+.mobileNav{position:fixed;z-index:30;left:0;right:0;bottom:0;height:calc(58px + env(safe-area-inset-bottom));padding:0 18px env(safe-area-inset-bottom);
+  display:flex;align-items:center;justify-content:space-around;background:rgba(255,255,255,.96);backdrop-filter:blur(14px);border-top:1px solid ${LINE};}
+.mobileNav button{width:54px;height:54px;display:grid;place-items:center;border:none;background:none;color:${TXT};border-radius:50%;}
+.mobileNav button.on svg{fill:${TXT};stroke-width:1.9;}
+@media (max-width:899px){
+  .root,.mainCol,.screen{width:100%;max-width:100%;min-width:0;margin:0;padding-left:0;padding-right:0;}
+  .screen{padding-bottom:calc(58px + env(safe-area-inset-bottom));}
+  .compose.screen{padding-bottom:0;}
+  .fab{bottom:calc(76px + env(safe-area-inset-bottom));right:18px;}
+  .syncPill{bottom:calc(68px + env(safe-area-inset-bottom));}
 }
-@media (min-width:1000px){
-  .root{display:flex;justify-content:flex-start;align-items:flex-start;padding-left:clamp(16px,4vw,72px);gap:0;}
+@media (min-width:900px){
+  .mobileNav{display:none;}
+  .leftNav{display:block;flex:0 0 88px;width:88px;align-self:stretch;min-height:100vh;}
+  .leftNavInner{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;align-items:center;padding:8px 10px 12px;}
+  .brandMark{width:52px;height:52px;border:none;background:none;border-radius:50%;display:grid;place-items:center;margin-bottom:3px;}
+  .brandMark:hover{background:#EFF3F4;}
+  .navLinks{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;}
+  .navButton{width:54px;height:54px;border:none;background:none;border-radius:50%;display:flex;align-items:center;justify-content:center;color:${TXT};}
+  .navButton:hover{background:#EFF3F4;}
+  .navButton.on svg{fill:${TXT};stroke-width:1.9;}
+  .navButton span,.navCompose span,.navAccountText,.navAccount>svg{display:none;}
+  .navCompose{width:52px;height:52px;display:grid;place-items:center;border:none;border-radius:50%;background:${BL};color:#fff;margin-top:14px;box-shadow:0 5px 14px rgba(29,155,240,.22);}
+  .navCompose svg{width:22px;height:22px;}
+  .navAccount{width:54px;height:54px;margin-top:auto;display:flex;align-items:center;justify-content:center;border:none;background:none;border-radius:50%;padding:6px;color:${TXT};}
+  .navAccount:hover{background:#EFF3F4;}
   .mainCol{flex:0 0 600px;width:600px;border-left:1px solid ${LINE};border-right:1px solid ${LINE};min-height:100vh;position:relative;}
   .screen{position:relative;}
-  .fab{position:absolute;right:22px;bottom:26px;}
-  .sidebar{display:block;flex:0 0 360px;width:360px;align-self:stretch;position:sticky;top:0;height:100vh;overflow-y:auto;padding:12px 18px 40px;}
+  .fab{display:none;}
+  .mobileOnly{display:none!important;}
+  .desktopOnly{display:flex;}
+  .timelineHeading{flex:1;min-width:0;flex-direction:column;align-items:flex-start;border:none;background:none;padding:6px 0;text-align:left;color:${TXT};}
+  .timelineHeading>span{font-size:19px;font-weight:800;line-height:1.15;max-width:440px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .timelineHeading small{font-size:12px;color:${MUT};font-weight:400;margin-top:2px;}
+  .topbar .iconBtn{margin-right:-8px;}
   .overlayInner,.sheet,.confirmBox{margin:0 auto;}
 }
+@media (min-width:1180px){
+  .sidebar{display:block;flex:0 0 360px;width:360px;align-self:stretch;position:sticky;top:0;height:100vh;overflow-y:auto;padding:12px 18px 40px;}
+}
+@media (min-width:1320px){
+  .leftNav{flex-basis:260px;width:260px;}
+  .leftNavInner{align-items:stretch;padding-left:18px;padding-right:18px;}
+  .brandMark{margin-left:0;}
+  .navLinks{align-items:stretch;gap:4px;}
+  .navButton{width:max-content;max-width:100%;height:52px;padding:0 18px;gap:20px;border-radius:999px;justify-content:flex-start;font-size:20px;font-weight:400;}
+  .navButton.on{font-weight:700;}
+  .navButton span,.navCompose span,.navAccountText,.navAccount>svg{display:flex;}
+  .navCompose{width:100%;height:52px;border-radius:999px;display:flex;gap:10px;font-size:17px;font-weight:700;margin-top:14px;}
+  .navCompose svg{display:none;}
+  .navAccount{width:100%;height:64px;justify-content:flex-start;gap:10px;border-radius:999px;padding:10px;}
+  .navAccountText{flex:1;min-width:0;flex-direction:column;align-items:flex-start;line-height:1.25;}
+  .navAccountText b,.navAccountText small{max-width:135px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .navAccountText b{font-size:14px;}
+  .navAccountText small{font-size:13px;color:${MUT};font-weight:400;}
+  .navAccount>svg{width:18px;}
+}
 .sideSearch{margin:6px 0 16px;}
-.sideCard{background:#fff;border:1px solid ${LINE};border-radius:18px;padding:14px 14px 16px;}
-.sideTitle{font-size:13px;font-weight:800;color:${TXT};margin-bottom:12px;}
+.sideCard{background:#F7F9F9;border:none;border-radius:16px;padding:14px 16px 16px;margin-bottom:16px;}
+.sideTitle{font-size:20px;font-weight:800;color:${TXT};margin-bottom:12px;}
 .sideEmpty{font-size:12.5px;color:${FAINT};line-height:1.8;padding:18px 6px;text-align:center;}
+.sideStat{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid #EFF3F4;font-size:14px;color:${MUT};}
+.sideStat b{font-size:15px;color:${TXT};}
+.sideFoot{font-size:12px;color:${MUT};padding-top:10px;border-top:1px solid #EFF3F4;}
+.sideLegal{font-size:12px;color:${MUT};padding:0 12px;}
 .imgGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
 .imgCell{aspect-ratio:1;border:none;border-radius:8px;background:#eee center/cover no-repeat;cursor:pointer;padding:0;}
 .imgCell:active{opacity:.8;}
@@ -1745,17 +1988,25 @@ input,textarea{font-family:inherit;font-weight:600;}
 
 /* timeline profile header (full, X-style) */
 .tlProfile{border-bottom:1px solid ${LINE};}
-.tlCover{height:96px;background:${BRD2} center/cover no-repeat;}
-.tlProfBody{padding:0 16px 12px;}
-.tlProfRow1{display:flex;justify-content:space-between;align-items:flex-end;margin-top:-34px;margin-bottom:8px;}
+.tlCover{height:clamp(112px,30vw,200px);background:#CFD9DE center/cover no-repeat;}
+.tlProfBody{padding:0 16px 14px;}
+.tlProfRow1{display:flex;justify-content:space-between;align-items:flex-end;margin-top:-39px;margin-bottom:10px;}
 .tlAvatarWrap{border:none;background:#fff;padding:0;border-radius:50%;border:4px solid #fff;line-height:0;}
-.tlAvatarWrap .avatar{width:66px;height:66px;}
+.tlAvatarWrap .avatar{width:74px;height:74px;}
 .tlEditBtn{border:1px solid ${BRD2};background:#fff;color:${TXT};border-radius:999px;padding:7px 15px;font-size:13.5px;font-weight:700;white-space:nowrap;margin-bottom:4px;}
-.tlEditBtn:active{background:${LINE2};}
+.tlEditBtn:hover,.tlEditBtn:active{background:#EFF3F4;}
 .tlProfName{font-size:18px;font-weight:800;color:${TXT};display:flex;align-items:center;gap:5px;}
 .tlProfHandle{font-size:14px;color:${MUT};margin-top:1px;}
 .tlProfBio{font-size:14px;line-height:1.55;color:${TXT};font-weight:400;margin-top:10px;white-space:pre-wrap;}
 .tlProfJoined{display:flex;align-items:center;gap:6px;font-size:13px;color:${MUT};margin-top:10px;}
+.tlProfStats{display:flex;gap:6px;font-size:13px;color:${MUT};margin-top:10px;}
+.tlProfStats b{color:${TXT};margin-left:8px;}
+.tlProfStats b:first-child{margin-left:0;}
+.timelineTabs{height:54px;display:flex;border-bottom:1px solid ${LINE};}
+.timelineTabs button{position:relative;flex:1;border:none;background:none;color:${MUT};font-size:14px;}
+.timelineTabs button:hover{background:rgba(15,20,25,.05);}
+.timelineTabs button.on{color:${TXT};font-weight:700;}
+.timelineTabs button.on span:after{content:"";position:absolute;height:4px;border-radius:999px;background:${BL};left:50%;right:auto;width:56px;bottom:0;transform:translateX(-50%);}
 
 /* confirm dialog */
 .overlay.center{align-items:center;justify-content:center;padding:24px;}
@@ -1768,7 +2019,9 @@ input,textarea{font-family:inherit;font-weight:600;}
 .cfBtn.cfDanger{background:${RED};color:#fff;border-color:${RED};}
 
 /* composer: avatar top-left, thin text */
-.postBtn{background:${INK};color:#fff;border:none;border-radius:999px;padding:8px 18px;font-size:14px;font-weight:800;}
+.postBtn{background:${BL};color:#fff;border:none;border-radius:999px;padding:8px 18px;font-size:14px;font-weight:800;}
+.postBtn:disabled{opacity:.55;}
+.composeCancel{color:${TXT};font-weight:500;}
 .composeRow{display:flex;gap:12px;align-items:flex-start;}
 .composeAvatar{border:none;background:none;padding:0;flex-shrink:0;border-radius:50%;margin-top:2px;}
 .composeAvatar:active{opacity:.7;}
@@ -1803,7 +2056,7 @@ input,textarea{font-family:inherit;font-weight:600;}
 
 /* account sheet cover picker */
 .coverPick{width:100%;height:120px;border-radius:14px;border:1px dashed ${LINE};background:#EAF0F2 center/cover no-repeat;
-  display:grid;place-items:center;margin-bottom:16px;color:${MUT};}
+  position:relative;overflow:hidden;display:grid;place-items:center;margin-bottom:16px;color:${MUT};cursor:pointer;}
 .coverHint{font-size:13px;font-weight:700;}
 
 /* commonplace */
@@ -1832,8 +2085,8 @@ input,textarea{font-family:inherit;font-weight:600;}
 /* date search */
 .searchWrap{display:flex;align-items:center;gap:8px;}
 .searchWrap .search{flex:1;}
-.dateBtn{position:relative;flex-shrink:0;width:44px;height:42px;border:1px solid ${LINE};border-radius:13px;background:#fff;color:${INK};display:grid;place-items:center;cursor:pointer;}
-.dateBtn:active{background:${LINE2};}
+.dateBtn{position:relative;flex-shrink:0;width:42px;height:42px;border:1px solid transparent;border-radius:50%;background:#EFF3F4;color:${INK};display:grid;place-items:center;cursor:pointer;}
+.dateBtn:hover,.dateBtn:active{background:#E7ECEF;}
 .dateBtn svg{color:${INK};}
 .dateInput{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;padding:0;margin:0;cursor:pointer;}
 .dateInput::-webkit-calendar-picker-indicator{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
