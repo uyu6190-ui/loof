@@ -1,10 +1,11 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import {
   addDoc, collection, deleteField, doc, getDocFromServer, getDocsFromServer,
-  onSnapshot, runTransaction, serverTimestamp, setDoc, writeBatch
+  limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, writeBatch
 } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { deleteObject, getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { db, getFirebaseUser, mediaStorage } from "./firebase.js";
+import { isRetryableStorageError } from "./media-utils.js";
 import { storedArray, upsertStoredItem } from "./storage-utils.js";
 
 const DATA_KEYS = {
@@ -16,11 +17,63 @@ const PREFERENCE_KEYS = new Set(["nb.current", "nb.icloud"]);
 // Firestoreは1ドキュメント1MiB・1バッチ10MiBまで。複数画像でも余裕を持たせる。
 const CHUNK_SIZE = 400_000;
 const CHUNKS_PER_BATCH = 8;
+const INITIAL_ENTRY_LIMIT = 100;
+const DISPLAY_CACHE_LIMIT = 100;
+const DISPLAY_CACHE_PREFIX = "loof.server-cache";
 const ENABLE_REALTIME_SNAPSHOTS = false;
 const ENABLE_FIRESTORE_AUDIT_LOGS = false;
 const LoofCloud = registerPlugin("LoofCloud");
 const migrations = new Map();
 const migratedUsers = new Set();
+
+function displayCacheKey(userId, key) {
+  return `${DISPLAY_CACHE_PREFIX}:${userId}:${key}`;
+}
+
+function recentItemsForCache(key, values) {
+  if (key !== "nb.entries") return values;
+  return [...values]
+    .sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")))
+    .slice(0, DISPLAY_CACHE_LIMIT);
+}
+
+function readDisplayCache(userId, key) {
+  try {
+    const raw = window.localStorage.getItem(displayCacheKey(userId, key));
+    if (raw == null) return null;
+    const values = storedArray(raw, { strict: true });
+    if (key === "nb.accounts" && values.length === 0) return null;
+    return values;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeDisplayCache(userId, key, values) {
+  try {
+    window.localStorage.setItem(
+      displayCacheKey(userId, key),
+      JSON.stringify(recentItemsForCache(key, values))
+    );
+  } catch (error) {
+    syncLog("display-cache-write-skipped", { userId, key, message: error.message });
+  }
+}
+
+function readPreferenceDisplayCache(userId, key) {
+  try {
+    return window.localStorage.getItem(displayCacheKey(userId, key));
+  } catch (_) {
+    return null;
+  }
+}
+
+function writePreferenceDisplayCache(userId, key, value) {
+  try {
+    if (value == null) window.localStorage.removeItem(displayCacheKey(userId, key));
+    else window.localStorage.setItem(displayCacheKey(userId, key), value);
+  } catch (_) {}
+}
 
 const localStorageAdapter = {
   async get(key) {
@@ -128,21 +181,79 @@ function imageExtension(contentType) {
   return "jpg";
 }
 
+function managedMediaRef(userId, value) {
+  if (typeof value !== "string" || (!value.startsWith("gs://") && !value.startsWith("https://"))) return null;
+  try {
+    const target = ref(mediaStorage, value);
+    return target.fullPath.startsWith(`users/${userId}/media/`) ? target : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function collectManagedMediaRefs(userId, value, refs = new Map()) {
+  if (typeof value === "string") {
+    const target = managedMediaRef(userId, value);
+    if (target) refs.set(target.fullPath, target);
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    value.forEach(part => collectManagedMediaRefs(userId, part, refs));
+    return refs;
+  }
+  if (value && typeof value === "object") {
+    Object.values(value).forEach(part => collectManagedMediaRefs(userId, part, refs));
+  }
+  return refs;
+}
+
+async function retryStorageOperation(operation, attempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isRetryableStorageError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, attempt * 300));
+    }
+  }
+  throw lastError;
+}
+
+async function deleteManagedMediaTargets(targets, detail = {}) {
+  for (const target of targets) {
+    try {
+      await retryStorageOperation(() => deleteObject(target), 2);
+      syncLog("image-deleted", { ...detail, path: target.fullPath });
+    } catch (error) {
+      if (error?.code === "storage/object-not-found") continue;
+      console.warn("[loof sync] image-delete-failed", { ...detail, path: target.fullPath, error });
+    }
+  }
+}
+
 async function uploadInlineImages(userId, key, item) {
   // Firestoreにはdata URLを残さない。画像本体はFirebase Storage、投稿にはURLだけを保存する。
   const revision = `${Date.now()}-${getClientId()}-${Math.random().toString(36).slice(2, 8)}`;
+  const uploadedTargets = [];
   const walk = async (value, path = []) => {
     if (typeof value === "string" && value.startsWith("data:image/")) {
       const response = await fetch(value);
       const blob = await response.blob();
       const name = `${path.join("-") || "image"}.${imageExtension(blob.type)}`;
       const target = ref(mediaStorage, `users/${userId}/media/${key}/${item.id}/${revision}/${name}`);
-      await uploadBytes(target, blob, { contentType: blob.type || "image/jpeg" });
-      const url = await getDownloadURL(target);
+      await retryStorageOperation(() => uploadBytes(target, blob, { contentType: blob.type || "image/jpeg" }));
+      uploadedTargets.push(target);
+      const url = await retryStorageOperation(() => getDownloadURL(target));
       syncLog("image-uploaded", { userId, key, id: item.id, path: path.join(".") });
       return url;
     }
-    if (Array.isArray(value)) return Promise.all(value.map((part, index) => walk(part, [...path, index])));
+    if (Array.isArray(value)) {
+      const copy = [];
+      for (let index = 0; index < value.length; index += 1) copy.push(await walk(value[index], [...path, index]));
+      return copy;
+    }
     if (value && typeof value === "object") {
       const copy = {};
       for (const [name, part] of Object.entries(value)) copy[name] = await walk(part, [...path, name]);
@@ -150,7 +261,12 @@ async function uploadInlineImages(userId, key, item) {
     }
     return value;
   };
-  return walk(item);
+  try {
+    return { item: await walk(item), uploadedTargets };
+  } catch (error) {
+    await deleteManagedMediaTargets(uploadedTargets, { userId, key, id: item.id, reason: "upload-failed" });
+    throw error;
+  }
 }
 
 async function readChunks(target, chunkCount, revision) {
@@ -206,39 +322,60 @@ async function writeChunks(target, serialized, revision) {
   return chunks.length;
 }
 
-async function safelyWriteItem(userId, key, item, { migration = false, uploadImages = true } = {}) {
+async function safelyWriteItem(userId, key, item, { migration = false, uploadImages = true, previousItem = null } = {}) {
   if (!item?.id || item.isAll) return { accepted: false, item };
-  const storedItem = uploadImages ? await uploadInlineImages(userId, key, item) : item;
+  const uploadResult = uploadImages
+    ? await uploadInlineImages(userId, key, item)
+    : { item, uploadedTargets: [] };
+  const storedItem = uploadResult.item;
+  const uploadedTargets = uploadResult.uploadedTargets;
   const target = itemRef(userId, key, storedItem.id);
   const serialized = JSON.stringify(storedItem);
   const proposedAt = clientUpdatedAt(storedItem);
   const large = serialized.length > CHUNK_SIZE;
   const clientId = getClientId();
   const revision = large ? `${proposedAt}-${clientId}-${Math.random().toString(36).slice(2, 10)}` : null;
-  // 先に書かれた古い世代はmetadataが採用されない限り参照されない。ここで同一chunkを共有しない。
-  const chunkCount = large ? await writeChunks(target, serialized, revision) : 0;
+  let accepted;
+  try {
+    // 先に書かれた古い世代はmetadataが採用されない限り参照されない。ここで同一chunkを共有しない。
+    const chunkCount = large ? await writeChunks(target, serialized, revision) : 0;
 
-  const accepted = await runTransaction(db, async (transaction) => {
-    const previous = await transaction.get(target);
-    const existing = previous.exists() ? previous.data() : null;
-    const existingAt = Number(existing?.clientUpdatedAt || 0);
-    // 古い端末の内容では、新しいクラウド内容を更新しない。
-    if (existingAt > proposedAt || (existingAt === proposedAt && existing?.clientId && existing.clientId !== clientId)) {
-      return false;
-    }
-    transaction.set(target, {
-      id: storedItem.id,
-      payload: large ? deleteField() : serialized,
-      chunkCount,
-      revision: large ? revision : deleteField(),
-      clientUpdatedAt: proposedAt,
-      updatedAt: serverTimestamp(),
-      clientId,
-      deletedAt: deleteField(),
-      migratedFromLegacy: migration || deleteField()
-    }, { merge: true });
-    return true;
-  });
+    accepted = await runTransaction(db, async (transaction) => {
+      const previous = await transaction.get(target);
+      const existing = previous.exists() ? previous.data() : null;
+      const existingAt = Number(existing?.clientUpdatedAt || 0);
+      // 古い端末の内容では、新しいクラウド内容を更新しない。
+      if (existingAt > proposedAt || (existingAt === proposedAt && existing?.clientId && existing.clientId !== clientId)) {
+        return false;
+      }
+      transaction.set(target, {
+        id: storedItem.id,
+        payload: large ? deleteField() : serialized,
+        chunkCount,
+        revision: large ? revision : deleteField(),
+        clientUpdatedAt: proposedAt,
+        updatedAt: serverTimestamp(),
+        clientId,
+        deletedAt: deleteField(),
+        migratedFromLegacy: migration || deleteField()
+      }, { merge: true });
+      return true;
+    });
+  } catch (error) {
+    await deleteManagedMediaTargets(uploadedTargets, { userId, key, id: item.id, reason: "item-write-failed" });
+    throw error;
+  }
+
+  if (!accepted) {
+    await deleteManagedMediaTargets(uploadedTargets, { userId, key, id: item.id, reason: "stale-write" });
+  } else if (previousItem) {
+    const previousRefs = collectManagedMediaRefs(userId, previousItem);
+    const currentRefs = collectManagedMediaRefs(userId, storedItem);
+    const removedTargets = [...previousRefs.entries()]
+      .filter(([path]) => !currentRefs.has(path))
+      .map(([, mediaRef]) => mediaRef);
+    await deleteManagedMediaTargets(removedTargets, { userId, key, id: item.id, reason: "replaced" });
+  }
 
   syncLog(accepted ? "item-written" : "stale-write-skipped", {
     userId, key, id: storedItem.id, clientUpdatedAt: proposedAt, migration
@@ -249,7 +386,7 @@ async function safelyWriteItem(userId, key, item, { migration = false, uploadIma
   return { accepted, item: storedItem };
 }
 
-async function safelyDeleteItem(userId, key, id) {
+async function safelyDeleteItem(userId, key, id, previousItem = null) {
   if (!DATA_KEYS[key] || !id || id === "all") return false;
   const target = itemRef(userId, key, id);
   const proposedAt = Date.now();
@@ -267,6 +404,11 @@ async function safelyDeleteItem(userId, key, id) {
     }, { merge: true });
     return true;
   });
+  if (accepted && previousItem) {
+    await deleteManagedMediaTargets([...collectManagedMediaRefs(userId, previousItem).values()], {
+      userId, key, id, reason: "item-deleted"
+    });
+  }
   syncLog(accepted ? "item-deleted" : "stale-delete-skipped", { userId, key, id, clientUpdatedAt: proposedAt });
   void writeAuditLog(userId, accepted ? "item-deleted" : "stale-delete-skipped", { key, id, clientUpdatedAt: proposedAt });
   return accepted;
@@ -356,12 +498,57 @@ function createFirebaseStorageAdapter() {
   const watchers = new Map();
   const known = new Map();
   const refreshQueues = new Map();
+  const initialSyncs = new Map();
+  const fullRefreshes = new Map();
+  const preferenceRefreshes = new Map();
+  const readyKeys = new Set();
+  const requiredReadyKeys = new Set(["nb.accounts", "nb.entries"]);
   const notify = (key, value) => listeners.get(key)?.forEach(listener => listener(value));
   const knownFor = (userId, key) => {
     const id = `${userId}:${key}`;
     if (!known.has(id)) known.set(id, new Map());
     return known.get(id);
   };
+
+  function primeKnownFromCache(user, key, values) {
+    const map = knownFor(user.uid, key);
+    if (map.size > 0) return;
+    values.forEach(value => {
+      if (!value?.id || value.isAll) return;
+      map.set(value.id, {
+        id: value.id,
+        value,
+        signature: stable(value),
+        deleted: false,
+        clientUpdatedAt: clientUpdatedAt(value)
+      });
+    });
+  }
+
+  function markInitialReady(key) {
+    readyKeys.add(key);
+    reportCurrentSyncStatus();
+  }
+
+  function reportCurrentSyncStatus() {
+    if (![...requiredReadyKeys].every(requiredKey => readyKeys.has(requiredKey))) {
+      reportSync("syncing");
+    } else if (fullRefreshes.size > 0) {
+      reportSync("background");
+    } else {
+      reportSync("connected");
+    }
+  }
+
+  async function getStorageUser() {
+    try {
+      return await getFirebaseUser();
+    } catch (error) {
+      // 匿名認証が無効・一時停止中でも、ゲスト利用は端末保存で継続する。
+      syncLog("auth-unavailable-local-fallback", { message: error.message });
+      return null;
+    }
+  }
 
   async function mergeItemSnapshots(user, key, snapshots, { initial = false } = {}) {
     const incoming = await Promise.all(snapshots.map(async snapshot => {
@@ -406,9 +593,11 @@ function createFirebaseStorageAdapter() {
     return [...map.values()].filter(record => !record.deleted && !record.quarantined && record.value).map(record => record.value);
   }
 
-  async function loadItemsFromServer(user, key, { initial = false } = {}) {
-    // 一覧・検索・カレンダーが全履歴を前提にしているため、100件で打ち切らず全件を復元する。
-    const snapshots = await getDocsFromServer(collectionRef(user.uid, key));
+  async function loadItemsFromServer(user, key, { initial = false, firstPage = false } = {}) {
+    const source = key === "nb.entries" && firstPage
+      ? query(collectionRef(user.uid, key), orderBy("clientUpdatedAt", "desc"), limit(INITIAL_ENTRY_LIMIT))
+      : collectionRef(user.uid, key);
+    const snapshots = await getDocsFromServer(source);
     return mergeItemSnapshots(user, key, snapshots.docs, { initial });
   }
 
@@ -436,7 +625,7 @@ function createFirebaseStorageAdapter() {
           ? JSON.stringify(await mergeItemSnapshots(user, key, snapshot.docChanges().map(change => change.doc)))
           : (snapshot.exists() ? JSON.stringify(snapshot.data().value) : null);
         if (value != null) notify(key, value);
-        reportSync("connected");
+        reportCurrentSyncStatus();
         syncLog("server-snapshot-applied", { userId: user.uid, key });
       });
       refreshQueues.set(id, refresh);
@@ -461,20 +650,108 @@ function createFirebaseStorageAdapter() {
     }
   }
 
+  function refreshFullHistory(user, key) {
+    if (key !== "nb.entries") return Promise.resolve();
+    const id = `${user.uid}:${key}`;
+    if (fullRefreshes.has(id)) return fullRefreshes.get(id);
+    const task = (async () => {
+      let succeeded = false;
+      try {
+        reportSync("background");
+        // 旧データ回復と全履歴取得は初期画面を表示した後に行う。
+        await migrateLegacyFirestore(user);
+        const values = await loadItemsFromServer(user, key);
+        writeDisplayCache(user.uid, key, values);
+        notify(key, JSON.stringify(values));
+        syncLog("server-full-history-loaded", { userId: user.uid, key, count: values.length });
+        succeeded = true;
+      } catch (error) {
+        reportSync("partial", error);
+        syncLog("server-full-history-failed", { userId: user.uid, key, message: error.message });
+      } finally {
+        fullRefreshes.delete(id);
+        if (succeeded) reportCurrentSyncStatus();
+      }
+    })();
+    fullRefreshes.set(id, task);
+    return task;
+  }
+
+  function syncInitialPage(user, key, { cached = false } = {}) {
+    const id = `${user.uid}:${key}`;
+    if (initialSyncs.has(id)) return initialSyncs.get(id);
+    const task = (async () => {
+      try {
+        reportSync("syncing");
+        const values = await loadItemsFromServer(user, key, {
+          initial: !cached,
+          firstPage: key === "nb.entries"
+        });
+        writeDisplayCache(user.uid, key, values);
+        notify(key, JSON.stringify(values));
+        watch(user, key);
+        markInitialReady(key);
+        syncLog("server-initial-page-loaded", { userId: user.uid, key, count: values.length });
+        void refreshFullHistory(user, key);
+        return values;
+      } catch (error) {
+        reportSync("error", error);
+        syncLog("server-initial-page-failed", { userId: user.uid, key, message: error.message });
+        throw error;
+      } finally {
+        initialSyncs.delete(id);
+      }
+    })();
+    initialSyncs.set(id, task);
+    return task;
+  }
+
+  function refreshPreference(user, key) {
+    const id = `${user.uid}:${key}`;
+    if (preferenceRefreshes.has(id)) return preferenceRefreshes.get(id);
+    const task = (async () => {
+      try {
+        const value = await loadPreferenceFromServer(user, key);
+        writePreferenceDisplayCache(user.uid, key, value);
+        if (value != null) notify(key, value);
+        watch(user, key);
+      } catch (error) {
+        syncLog("preference-refresh-failed", { userId: user.uid, key, message: error.message });
+      } finally {
+        preferenceRefreshes.delete(id);
+      }
+    })();
+    preferenceRefreshes.set(id, task);
+    return task;
+  }
+
   return {
     async get(key) {
-      const user = await getFirebaseUser();
-      if (user.isAnonymous || key === "nb.auth") return localStorageAdapter.get(key);
+      if (key === "nb.auth") return localStorageAdapter.get(key);
+      const user = await getStorageUser();
+      if (!user || user.isAnonymous) return localStorageAdapter.get(key);
       if (!DATA_KEYS[key] && !PREFERENCE_KEYS.has(key)) return localStorageAdapter.get(key);
       try {
-        // 起動・再読み込みでは、必ずFirestoreサーバーを先に読む。端末キャッシュは復元元にしない。
-        await migrateLegacyFirestore(user);
-        const value = DATA_KEYS[key]
-          ? JSON.stringify(await loadItemsFromServer(user, key, { initial: true }))
-          : await loadPreferenceFromServer(user, key);
+        if (DATA_KEYS[key]) {
+          const cached = readDisplayCache(user.uid, key);
+          if (cached) {
+            primeKnownFromCache(user, key, cached);
+            void syncInitialPage(user, key, { cached: true }).catch(() => {});
+            syncLog("display-cache-used", { userId: user.uid, key, count: cached.length });
+            return { value: JSON.stringify(cached) };
+          }
+          const values = await syncInitialPage(user, key);
+          return { value: JSON.stringify(values) };
+        }
+        // 選択中ノートも表示専用キャッシュを先に使い、起動直後のノート切り替わりを防ぐ。
+        const cachedPreference = readPreferenceDisplayCache(user.uid, key);
+        if (cachedPreference != null) {
+          void refreshPreference(user, key);
+          return { value: cachedPreference };
+        }
+        const value = await loadPreferenceFromServer(user, key);
+        writePreferenceDisplayCache(user.uid, key, value);
         watch(user, key);
-        reportSync("connected");
-        syncLog("server-first-load", { userId: user.uid, key });
         return value == null ? null : { value };
       } catch (error) {
         reportSync("error", error);
@@ -485,11 +762,12 @@ function createFirebaseStorageAdapter() {
     async set(key, value) {
       await localStorageAdapter.set(key, value);
       if (key === "nb.auth") return;
-      const user = await getFirebaseUser();
-      if (user.isAnonymous) return;
+      const user = await getStorageUser();
+      if (!user || user.isAnonymous) return;
       if (PREFERENCE_KEYS.has(key)) {
         await safelyWritePreference(user.uid, key, value);
-        reportSync("connected");
+        writePreferenceDisplayCache(user.uid, key, value);
+        reportCurrentSyncStatus();
         return;
       }
       if (!DATA_KEYS[key]) return;
@@ -504,7 +782,7 @@ function createFirebaseStorageAdapter() {
       const map = knownFor(user.uid, key);
       for (const item of values) {
         if (!item?.id || item.isAll || map.get(item.id)?.signature === stable(item)) continue;
-        const result = await safelyWriteItem(user.uid, key, item);
+        const result = await safelyWriteItem(user.uid, key, item, { previousItem: map.get(item.id)?.value || null });
         if (result.accepted) map.set(result.item.id, {
           id: result.item.id,
           value: result.item,
@@ -513,32 +791,37 @@ function createFirebaseStorageAdapter() {
           clientUpdatedAt: clientUpdatedAt(result.item)
         });
       }
-      reportSync("connected");
+      reportCurrentSyncStatus();
     },
     // 新規・編集の投稿は配列同期を経由せず、1ドキュメントの確定を待ってからUIに反映する。
     async saveItem(key, item) {
       try {
-        const user = await getFirebaseUser();
-        if (user.isAnonymous) return localStorageAdapter.saveItem(key, item);
+        const user = await getStorageUser();
+        if (!user || user.isAnonymous) return localStorageAdapter.saveItem(key, item);
         if (!DATA_KEYS[key]) return { ok: false, error: new Error("保存先が不正です") };
-        const result = await safelyWriteItem(user.uid, key, item);
+        if (!readyKeys.has(key)) {
+          return { ok: false, error: new Error("最新データを確認中です。同期完了後にもう一度お試しください") };
+        }
+        const map = knownFor(user.uid, key);
+        const result = await safelyWriteItem(user.uid, key, item, { previousItem: map.get(item.id)?.value || null });
         if (!result.accepted) {
           const error = new Error("この記録は別の端末で更新されています。再読み込みして内容を確認してください。");
           reportSync("error", error);
           return { ok: false, error };
         }
-        knownFor(user.uid, key).set(result.item.id, {
+        map.set(result.item.id, {
           id: result.item.id,
           value: result.item,
           signature: stable(result.item),
           deleted: false,
           clientUpdatedAt: clientUpdatedAt(result.item)
         });
-        reportSync("connected");
+        reportCurrentSyncStatus();
         return { ok: true, item: result.item };
       } catch (error) {
         reportSync("error", error);
         syncLog("item-save-failed", { key, id: item?.id, message: error.message });
+        console.error(`[loof sync] item-save-failed key=${key} id=${item?.id || "unknown"} code=${error?.code || "unknown"} message=${error?.message || String(error)}`, error);
         return { ok: false, error };
       }
     },
@@ -547,12 +830,16 @@ function createFirebaseStorageAdapter() {
     },
     async deleteItem(key, id) {
       try {
-        const user = await getFirebaseUser();
-        if (user.isAnonymous) return localStorageAdapter.deleteItem(key, id);
-        const accepted = await safelyDeleteItem(user.uid, key, id);
+        const user = await getStorageUser();
+        if (!user || user.isAnonymous) return localStorageAdapter.deleteItem(key, id);
+        if (!readyKeys.has(key)) {
+          return { ok: false, error: new Error("最新データを確認中です。同期完了後にもう一度お試しください") };
+        }
+        const map = knownFor(user.uid, key);
+        const accepted = await safelyDeleteItem(user.uid, key, id, map.get(id)?.value || null);
         if (!accepted) return { ok: false, error: new Error("この記録は別の端末で更新されています") };
-        knownFor(user.uid, key).set(id, { id, deleted: true, clientUpdatedAt: Date.now() });
-        reportSync("connected");
+        map.set(id, { id, deleted: true, clientUpdatedAt: Date.now() });
+        reportCurrentSyncStatus();
         return { ok: true };
       } catch (error) {
         reportSync("error", error);
@@ -575,14 +862,18 @@ function createFirebaseStorageAdapter() {
   };
 }
 
-async function createNativeStorageAdapter() {
-  try {
-    const status = await LoofCloud.isAvailable();
-    if (!status.available) return localStorageAdapter;
-  } catch (_) { return localStorageAdapter; }
+function createNativeStorageAdapter() {
+  const listeners = new Map();
+  const refreshes = new Map();
   let mutationQueue = Promise.resolve();
+  const availability = LoofCloud.isAvailable()
+    .then(status => Boolean(status.available))
+    .catch(() => false);
+  const notify = (key, value) => listeners.get(key)?.forEach(listener => listener(value));
 
   async function readNativeValue(key, { fallbackOnError = true } = {}) {
+    const available = await availability;
+    if (!available) return localStorageAdapter.get(key);
     try {
       const result = await LoofCloud.get({ key });
       if (result?.value == null) {
@@ -601,9 +892,32 @@ async function createNativeStorageAdapter() {
     }
   }
 
-  function mutateItems(key, mutation, item) {
+  function refreshNativeValue(key) {
+    if (key === "nb.auth" || refreshes.has(key)) return refreshes.get(key);
+    const task = (async () => {
+      try {
+        const previous = await localStorageAdapter.get(key);
+        const current = await readNativeValue(key);
+        if (current?.value != null && current.value !== previous?.value) {
+          notify(key, current.value);
+        }
+      } finally {
+        refreshes.delete(key);
+      }
+    })();
+    refreshes.set(key, task);
+    return task;
+  }
+
+  function mutateItems(key, mutation, item, deleteId = null) {
     const task = mutationQueue.catch(() => {}).then(async () => {
       if (!DATA_KEYS[key]) throw new Error("保存先が不正です");
+      const available = await availability;
+      if (!available) {
+        return deleteId
+          ? localStorageAdapter.deleteItem(key, deleteId)
+          : localStorageAdapter.saveItem(key, item);
+      }
       // 読み込みに失敗した場合は古い端末キャッシュでCloudKitを上書きせず、保存自体を失敗させる。
       const current = await readNativeValue(key, { fallbackOnError: false });
       const next = mutation(storedArray(current?.value, { strict: true }));
@@ -611,20 +925,30 @@ async function createNativeStorageAdapter() {
       // CloudKitへの保存が確定してからローカルキャッシュとUIを更新する。
       await LoofCloud.set({ key, value });
       await localStorageAdapter.set(key, value);
-      return item ? { ok: true, item } : { ok: true };
+      return deleteId ? { ok: true } : { ok: true, item };
     });
     mutationQueue = task.then(() => undefined, () => undefined);
     return task.catch(error => ({ ok: false, error }));
   }
 
   return {
-    get: readNativeValue,
+    async get(key) {
+      if (key === "nb.auth") return localStorageAdapter.get(key);
+      const local = await localStorageAdapter.get(key);
+      if (local?.value != null) {
+        // 前回同期済みデータを即表示し、CloudKitの確認はバックグラウンドで行う。
+        void refreshNativeValue(key);
+        return local;
+      }
+      // 初回だけは空のローカル状態でクラウドを上書きしないよう、CloudKitの結果を待つ。
+      return readNativeValue(key);
+    },
     async set(key, value) {
       if (key === "nb.auth") {
         await localStorageAdapter.set(key, value);
         return;
       }
-      await LoofCloud.set({ key, value });
+      if (await availability) await LoofCloud.set({ key, value });
       await localStorageAdapter.set(key, value);
     },
     async delete(key) {
@@ -637,15 +961,23 @@ async function createNativeStorageAdapter() {
     },
     async deleteItem(key, id) {
       if (!id || id === "all") return { ok: false, error: new Error("削除内容が不正です") };
-      return mutateItems(key, values => values.filter(item => item?.id !== id));
+      return mutateItems(key, values => values.filter(item => item?.id !== id), null, id);
     },
-    subscribe() { return () => {}; }
+    subscribe(key, listener) {
+      const set = listeners.get(key) || new Set();
+      set.add(listener);
+      listeners.set(key, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(key);
+      };
+    }
   };
 }
 
 if (typeof window !== "undefined" && !window.storage) {
   const adapterPromise = Capacitor.isNativePlatform()
-    ? createNativeStorageAdapter()
+    ? Promise.resolve(createNativeStorageAdapter())
     : Promise.resolve(createFirebaseStorageAdapter());
   window.storage = {
     async get(key) { return (await adapterPromise).get(key); },

@@ -53,6 +53,10 @@ mutation first fetches the latest CloudKit value, changes only the requested
 item, and saves the merged array before the UI treats the operation as complete.
 Guest/local fallback uses the same item-level merge behavior.
 
+After the first successful sync, launches render the local copy immediately and
+refresh the CloudKit value in the background. A first launch with no local copy
+still waits for CloudKit so an empty device cannot overwrite existing history.
+
 Images are currently included in the existing JSON as compressed data URLs.
 Before App Store scale, consider moving image blocks to CloudKit assets so large
 photo-heavy histories sync more efficiently.

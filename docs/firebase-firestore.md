@@ -37,9 +37,9 @@ service firebase.storage {
 
 新しいデータは、`users/{uid}/entries/{entryId}`、`accounts/{accountId}`、`collections/{collectionId}` のように1件ずつ保存されます。`nb.entries` のような配列全体を保存・上書きすることはありません。
 
-各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はローカルキャッシュを使わず、まずFirestoreサーバーから復元します。
+各ドキュメントには `updatedAt: serverTimestamp()`、`clientUpdatedAt`、`clientId` を記録します。古い `clientUpdatedAt` の端末からの書き込みは拒否され、削除も tombstone として1件ずつ同期されます。起動時はユーザー別の表示専用キャッシュを先に表示し、最新100件をサーバーで確認するまでは更新操作を受け付けません。キャッシュの配列全体をFirestoreへ書き戻すことはありません。
 
-タイムライン、検索、カレンダー、画像一覧はいずれも全履歴を前提とするため、起動時の投稿復元を固定件数では打ち切りません。削除済みtombstoneは表示から除外しますが、「今回の一覧に無い」投稿を削除扱いにはしません。
+タイムラインは最新100件が確認できた時点で利用可能になり、残りの履歴と旧データ回復はバックグラウンドで統合します。検索、カレンダー、画像一覧に必要な全履歴はその後自動的に揃います。削除済みtombstoneは表示から除外しますが、「今回の一覧に無い」投稿を削除扱いにはしません。
 
 画像本体は `users/{uid}/media/...` にFirebase Storageへ保存し、Firestoreの投稿にはダウンロードURLだけを保存します。そのため複数画像でもFirestoreのドキュメント・バッチ上限に引っかかりません。過去のdata URL画像は読めるまま残り、投稿を次回編集・保存した時点でStorage URLへ移行します。
 

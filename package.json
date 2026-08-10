@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test": "node --test src/storage-utils.test.js",
+    "test": "node --test src/*.test.js",
     "preview": "vite preview --host 127.0.0.1",
     "ios:sync": "npm run build && cap sync ios && node scripts/patch-capacitor-ios.mjs",
     "ios:open": "cap open ios"
