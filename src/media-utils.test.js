@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   MAX_IMAGE_INPUT_BYTES,
   imageOutputType,
-  isRetryableStorageError,
   storageErrorMessage,
   validateImageFile,
 } from "./media-utils.js";
@@ -22,14 +21,8 @@ test("透過画像とGIFの形式を維持する", () => {
   assert.equal(imageOutputType("image/heic"), "image/jpeg");
 });
 
-test("Firebaseの料金・権限・端末容量エラーを利用者向けに分類する", () => {
-  assert.match(storageErrorMessage({ code: "storage/quota-exceeded" }), /Blaze/);
+test("Firestoreの無料枠・権限・端末容量エラーを利用者向けに分類する", () => {
+  assert.match(storageErrorMessage({ code: "resource-exhausted" }), /無料利用枠/);
   assert.match(storageErrorMessage({ code: "storage/unauthorized" }), /権限/);
   assert.match(storageErrorMessage({ name: "QuotaExceededError" }), /端末の保存容量/);
-});
-
-test("一時的なStorageエラーだけを再試行する", () => {
-  assert.equal(isRetryableStorageError({ code: "storage/unknown" }), true);
-  assert.equal(isRetryableStorageError({ code: "storage/unauthorized" }), false);
-  assert.equal(isRetryableStorageError({ code: "storage/quota-exceeded" }), false);
 });

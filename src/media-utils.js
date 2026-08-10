@@ -1,9 +1,4 @@
 export const MAX_IMAGE_INPUT_BYTES = 25 * 1024 * 1024;
-const RETRYABLE_STORAGE_CODES = new Set([
-  "storage/unknown",
-  "storage/retry-limit-exceeded",
-  "storage/server-file-wrong-size",
-]);
 
 export function validateImageFile(file, maxBytes = MAX_IMAGE_INPUT_BYTES) {
   if (!file || typeof file.type !== "string" || !file.type.startsWith("image/")) {
@@ -25,27 +20,23 @@ export function imageOutputType(inputType) {
   return "image/jpeg";
 }
 
-export function isRetryableStorageError(error) {
-  return RETRYABLE_STORAGE_CODES.has(error?.code);
-}
-
 export function storageErrorMessage(error, fallback = "保存できませんでした。もう一度お試しください。") {
   const code = error?.code || "";
   const detail = `${error?.message || ""}`;
 
-  if (code === "storage/quota-exceeded" || /\b402\b|Spark pricing plan|billing account|料金プラン/i.test(detail)) {
-    return "画像保存用のFirebase Storageが利用できません。管理者がBlazeプランと請求先を設定する必要があります。";
+  if (code === "resource-exhausted" || code === "firestore/resource-exhausted" || code === "storage/quota-exceeded") {
+    return "クラウド保存の無料利用枠または容量に達しました。不要な画像を削除してから、もう一度お試しください。";
   }
   if (code === "storage/unauthorized" || code === "permission-denied" || /\b403\b|permission|権限/i.test(detail)) {
-    return "画像を保存する権限がありません。Firebase Storageのルールを確認してください。";
+    return "クラウドへ保存する権限がありません。ログイン状態とFirestoreのルールを確認してください。";
   }
-  if (code === "storage/bucket-not-found" || /bucket.+not found/i.test(detail)) {
-    return "画像保存先がまだ作成されていません。Firebase Storageを有効にしてください。";
+  if (code === "unauthenticated") {
+    return "ログイン状態を確認できませんでした。再読み込みして、もう一度お試しください。";
   }
-  if (code === "storage/retry-limit-exceeded" || code === "storage/canceled" || /network|offline|timeout/i.test(detail)) {
-    return "画像の送信が完了しませんでした。通信を確認して、もう一度お試しください。";
+  if (code === "unavailable" || code === "deadline-exceeded" || /network|offline|timeout/i.test(detail)) {
+    return "クラウド保存が完了しませんでした。通信を確認して、もう一度お試しください。";
   }
-  if (error?.name === "QuotaExceededError" || /quota|容量/i.test(detail)) {
+  if (error?.name === "QuotaExceededError") {
     return "端末の保存容量が不足しています。不要な画像を削除して、もう一度お試しください。";
   }
   if (/別の端末で更新/.test(detail)) return detail;

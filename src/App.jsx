@@ -260,7 +260,7 @@ function SwipeSheet({ children, onClose, className = "" }) {
     timer.current = window.setTimeout(() => onClose?.(), 220);
   };
   const onDown = e => {
-    if (closing) return;
+    if (closing || !e.target.closest?.(".sheetDragZone")) return;
     gesture.current = { active: true, sy: e.clientY, y: e.clientY, t: performance.now(), vy: 0, dy: 0 };
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
@@ -284,8 +284,9 @@ function SwipeSheet({ children, onClose, className = "" }) {
         className={`sheet swipeSheet${closing ? " closing" : ""}${className ? ` ${className}` : ""}`}
         style={{ transform: drag ? `translate3d(0,${drag}px,0)` : undefined }}
         role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={finish} onPointerCancel={finish}
       >
-        <div className="sheetDragZone" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={finish} onPointerCancel={finish}>
+        <div className="sheetDragZone">
           <div className="grab" />
         </div>
         {children}
@@ -1757,17 +1758,17 @@ function Navigation({ account, view, onTimeline, onProfile, onCommonplace, onAcc
 }
 
 function NavButton({ label, active, icon, onClick }) {
-  return <button className={"navButton" + (active ? " on" : "")} onClick={onClick}>{icon}<span>{label}</span></button>;
+  return <button className={"navButton" + (active ? " on" : "")} aria-current={active ? "page" : undefined} onClick={onClick}>{icon}<span>{label}</span></button>;
 }
 
 function MobileNavigation({ view, onTimeline, onProfile, onCommonplace, onAccounts }) {
   const tap = fn => () => { navigator.vibrate?.(4); fn(); };
   return (
     <nav className="mobileNav" aria-label="メインナビゲーション">
-      <button className={view === "timeline" ? "on" : ""} onClick={tap(onTimeline)} aria-label="ホーム"><HomeIcon /></button>
-      <button className={view === "profile" ? "on" : ""} onClick={tap(onProfile)} aria-label="プロフィール"><UserIcon /></button>
-      <button className={view === "commonplace" ? "on" : ""} onClick={tap(onCommonplace)} aria-label="コモンプレイス"><Layers /></button>
-      <button className={view === "accounts" ? "on" : ""} onClick={tap(onAccounts)} aria-label="ノート"><NotebookIcon /></button>
+      <button className={view === "timeline" ? "on" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={tap(onTimeline)} aria-label="ホーム"><HomeIcon /></button>
+      <button className={view === "profile" ? "on" : ""} aria-current={view === "profile" ? "page" : undefined} onClick={tap(onProfile)} aria-label="プロフィール"><UserIcon /></button>
+      <button className={view === "commonplace" ? "on" : ""} aria-current={view === "commonplace" ? "page" : undefined} onClick={tap(onCommonplace)} aria-label="コモンプレイス"><Layers /></button>
+      <button className={view === "accounts" ? "on" : ""} aria-current={view === "accounts" ? "page" : undefined} onClick={tap(onAccounts)} aria-label="ノート"><NotebookIcon /></button>
     </nav>
   );
 }
