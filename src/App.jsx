@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { getFirebaseUser, isGoogleUser, signInWithGoogle, signOutFirebaseUser, subscribeToFirebaseUser } from "./firebase.js";
 import { imageOutputType, storageErrorMessage, validateImageFile } from "./media-utils.js";
 import { canEditAccount, saveProfile } from "./profile-utils.js";
@@ -186,6 +187,10 @@ function ConfirmHost() {
 const askConfirm = (message, o = {}) => _ask ? _ask({ message, ...o }) : Promise.resolve(true);
 const askAlert = (message) => _ask ? _ask({ message, okOnly: true }) : Promise.resolve(true);
 
+const isInteractivePress = target => Boolean(
+  target?.closest?.("button,a,input,textarea,select,label,[role='button'],[contenteditable='true']")
+);
+
 /* ---------- native-feeling route / sheet gestures ---------- */
 function RouteStage({ children, motion = "none", canGoBack = false, onBack, className = "" }) {
   const [drag, setDrag] = useState(0);
@@ -195,9 +200,8 @@ function RouteStage({ children, motion = "none", canGoBack = false, onBack, clas
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   const onDown = e => {
-    if (!canGoBack || e.clientX > 28 || settling) return;
-    gesture.current = { active: true, axis: null, sx: e.clientX, sy: e.clientY, x: e.clientX, t: performance.now(), vx: 0, dx: 0 };
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    if (!canGoBack || e.clientX > 28 || settling || isInteractivePress(e.target)) return;
+    gesture.current = { active: true, axis: null, captured: false, sx: e.clientX, sy: e.clientY, x: e.clientX, t: performance.now(), vx: 0, dx: 0 };
   };
   const onMove = e => {
     const g = gesture.current;
@@ -208,6 +212,10 @@ function RouteStage({ children, motion = "none", canGoBack = false, onBack, clas
       g.axis = Math.abs(dx) > Math.abs(dy) * 1.15 ? "x" : "y";
     }
     if (g.axis !== "x") return;
+    if (!g.captured) {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      g.captured = true;
+    }
     const now = performance.now(), dt = Math.max(1, now - g.t);
     g.vx = (e.clientX - g.x) / dt;
     g.x = e.clientX; g.t = now;
@@ -278,7 +286,7 @@ function SwipeSheet({ children, onClose, className = "" }) {
     if (g.dy > 92 || (g.dy > 24 && g.vy > .52)) dismiss();
     else setDrag(0);
   };
-  return (
+  const sheet = (
     <div className={`overlay swipeOverlay${closing ? " closing" : ""}`} onClick={dismiss}>
       <div
         className={`sheet swipeSheet${closing ? " closing" : ""}${className ? ` ${className}` : ""}`}
@@ -293,6 +301,7 @@ function SwipeSheet({ children, onClose, className = "" }) {
       </div>
     </div>
   );
+  return typeof document === "undefined" ? sheet : createPortal(sheet, document.body);
 }
 
 /* ---------- model ---------- */
@@ -849,17 +858,21 @@ function Timeline({ account, accounts, entries, onCompose, writeReady, onOpen, o
       {showAll ? (
         <main className="feed allPostsFeed">
           <div className="allPostsHead">
-            <span>すべての記録</span><span>{allItems.length}件</span>
+            <span>すべての記録</span>
+            <div className="allPostsTools">
+              <span>{allItems.length}件</span>
+              {allItems.length > 0 && <button className="dayCopy" onClick={() => onCopyDay(allItems)}>表示中をコピー</button>}
+            </div>
           </div>
           {allItems.length === 0
-            ? <div className="empty"><div className="emptyMark"><GhostMark size={40} /></div>{q.trim() ? "見つかりませんでした。" : "まだ何もありません。"}</div>
+            ? <div className="empty">{q.trim() ? "見つかりませんでした。" : "まだ何もありません。"}</div>
             : allItems.map(e => <PostCard key={e.id} entry={e} account={acctFor(e)} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
           <div style={{ height: 96 }} />
         </main>
       ) : q.trim() ? (
         <main className="feed">
           {days.length === 0
-            ? <div className="empty"><div className="emptyMark"><GhostMark size={40} /></div>見つかりませんでした。</div>
+            ? <div className="empty">見つかりませんでした。</div>
             : days.map(d => (
               <section className="day" key={d.date}>
                 <div className="dayHead">
@@ -879,7 +892,6 @@ function Timeline({ account, accounts, entries, onCompose, writeReady, onOpen, o
       ) : days.length === 0 ? (
         <main className="feed">
           <div className="empty">
-            <div className="emptyMark"><GhostMark size={40} /></div>
             まだ何もありません。<br />ポストボタンから書きはじめましょう。
           </div>
         </main>
@@ -923,9 +935,11 @@ function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostD
   const go = i => { setAnim(true); setIndex(c => clamp(typeof i === "function" ? i(c) : i)); };
 
   const onDown = e => {
-    if (e.button != null && e.button !== 0) return;
-    g.current = { down: true, sx: e.clientX, sy: e.clientY, axis: null, x: e.clientX, t: performance.now(), vx: 0, dx: 0 };
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    if ((e.button != null && e.button !== 0) || isInteractivePress(e.target)) {
+      g.current.down = false;
+      return;
+    }
+    g.current = { down: true, captured: false, sx: e.clientX, sy: e.clientY, axis: null, x: e.clientX, t: performance.now(), vx: 0, dx: 0 };
     setAnim(false);
   };
   const onMove = e => {
@@ -936,6 +950,10 @@ function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostD
       else return;
     }
     if (s.axis === "y") return;
+    if (!s.captured) {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      s.captured = true;
+    }
     const now = performance.now(), dt = Math.max(1, now - s.t);
     s.vx = (e.clientX - s.x) / dt;
     s.x = e.clientX; s.t = now;
@@ -1425,7 +1443,7 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
     }
   };
   return (
-    <SwipeSheet onClose={onClose}>
+    <SwipeSheet onClose={onClose} className="accountEditSheet">
         <div className="sheetTitle">{isNew ? "新しいノート" : "プロフィールを編集"}</div>
         <div className="sheetBody">
           <label className="coverPick" style={cover ? { backgroundImage: `url(${cover})` } : null} aria-label="ヘッダー画像を変更">
@@ -1739,7 +1757,6 @@ function Navigation({ account, view, onTimeline, onProfile, onCommonplace, onAcc
   return (
     <aside className="leftNav" aria-label="メインナビゲーション">
       <div className="leftNavInner">
-        <button className="brandMark" onClick={onTimeline} aria-label="Myposts ホーム"><GhostMark size={34} /></button>
         <nav className="navLinks">
           <NavButton label="ホーム" active={view === "timeline"} icon={<HomeIcon />} onClick={onTimeline} />
           <NavButton label="プロフィール" active={view === "profile"} icon={<UserIcon />} onClick={onProfile} />
@@ -1843,23 +1860,6 @@ function Login({ onGoogle, onGuest, busy }) {
   );
 }
 
-/* ---------- ghost mark (default avatar) ---------- */
-const GHOST_COLOR = "#3B2A6E";
-function GhostMark({ size = 40 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true">
-      <path
-        d="M18 50 V30 C18 18.5 24 12 32 12 C40 12 46 18.5 46 30 V50
-           C44.3 53 42.6 53 41 50 C39.4 47 37.6 47 36 50 C34.4 53 32.6 53 31 50
-           C29.4 47 27.6 47 26 50 C24.4 53 22.6 53 21 50 C20 48.4 19 48.4 18 50 Z"
-        fill="#fff" stroke={GHOST_COLOR} strokeWidth="4.6" strokeLinejoin="round" strokeLinecap="round"
-      />
-      <circle cx="26.5" cy="33" r="3.4" fill={GHOST_COLOR} />
-      <circle cx="37.5" cy="33" r="3.4" fill={GHOST_COLOR} />
-    </svg>
-  );
-}
-
 /* ---------- avatar ---------- */
 function Avatar({ account, size = 32 }) {
   if (account?.icon) {
@@ -1910,7 +1910,8 @@ const S = {
 
 const CSS = `
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-body{margin:0;background:#fff;font-weight:400;overscroll-behavior-y:none;}
+body{margin:0;background:#fff;font-weight:400;overscroll-behavior-y:none;
+  font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP','Segoe UI',sans-serif;}
 html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;}
 button{font-family:inherit;cursor:pointer;font-weight:600;}
 input,textarea{font-family:inherit;font-weight:400;}
@@ -2020,7 +2021,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 
 /* empty */
 .empty{text-align:center;color:${SUB};font-size:13.5px;line-height:2;padding:64px 24px;font-weight:600;}
-.emptyMark{display:grid;place-items:center;width:74px;height:74px;margin:0 auto 20px;border:1px solid ${LINE};border-radius:50%;background:#fff;}
 
 /* swipe pager */
 .pager{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:#fff;}
@@ -2173,13 +2173,13 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
   .compose.screen{padding-bottom:0;}
   .fab{bottom:calc(76px + env(safe-area-inset-bottom));right:18px;}
   .syncPill{bottom:calc(68px + env(safe-area-inset-bottom));}
+  .accountEditSheet{height:calc(100vh - 8px);max-height:calc(100vh - 8px);height:calc(100dvh - max(8px,env(safe-area-inset-top)));max-height:calc(100dvh - max(8px,env(safe-area-inset-top)));scroll-padding:64px 0 160px;}
+  .accountEditSheet .sheetBody{padding-bottom:max(34px,calc(20px + env(safe-area-inset-bottom)));}
 }
 @media (min-width:900px){
   .mobileNav{display:none;}
   .leftNav{display:block;flex:0 0 88px;width:88px;align-self:stretch;min-height:100vh;}
   .leftNavInner{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;align-items:center;padding:8px 10px 12px;}
-  .brandMark{width:52px;height:52px;border:none;background:none;border-radius:50%;display:grid;place-items:center;margin-bottom:3px;}
-  .brandMark:hover{background:#EFF3F4;}
   .navLinks{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;}
   .navButton{width:54px;height:54px;border:none;background:none;border-radius:50%;display:flex;align-items:center;justify-content:center;color:${TXT};}
   .navButton:hover{background:#EFF3F4;}
@@ -2206,7 +2206,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 @media (min-width:1320px){
   .leftNav{flex-basis:260px;width:260px;}
   .leftNavInner{align-items:stretch;padding-left:18px;padding-right:18px;}
-  .brandMark{margin-left:0;}
   .navLinks{align-items:stretch;gap:4px;}
   .navButton{width:max-content;max-width:100%;height:52px;padding:0 18px;gap:20px;border-radius:999px;justify-content:flex-start;font-size:20px;font-weight:400;}
   .navButton.on{font-weight:700;}
@@ -2367,6 +2366,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .allPostsBtn:active,.allPostsBtn.on{background:${INK};border-color:${INK};color:#fff;}
 .allPostsHead{display:flex;align-items:center;justify-content:space-between;padding:7px 2px 11px;color:${MUT};font-size:12px;letter-spacing:.04em;}
 .allPostsHead span:first-child{color:${INK};font-size:14px;font-weight:800;}
+.allPostsTools{display:flex;align-items:center;gap:10px;}
+.allPostsTools .dayCopy{letter-spacing:0;}
 .xTime.asLink{background:none;border:none;padding:0;color:${MUT};font-size:15px;font-weight:400;cursor:pointer;}
 .xTime.asLink:active{text-decoration:underline;color:${INK};}
 
