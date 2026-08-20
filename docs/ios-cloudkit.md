@@ -45,9 +45,20 @@ The first CloudKit bridge stores loof's existing persisted keys as records of
 type `LoofKV` in the private database.
 
 - `key`: persisted app key, such as `nb.accounts`
-- `value`: JSON string
+- `value`: small JSON string
+- `asset`: JSON file for values larger than 700KB (including image data URLs)
 - `updatedAt`: last native write date
 
-Images are currently included in the existing JSON as compressed data URLs.
-Before App Store scale, consider moving image blocks to CloudKit assets so large
-photo-heavy histories sync more efficiently.
+Item saves and deletes are serialized through this key-value record. Each
+mutation first fetches the latest CloudKit value, changes only the requested
+item, and saves the merged array before the UI treats the operation as complete.
+Guest/local fallback uses the same item-level merge behavior.
+
+After the first successful sync, launches render the local copy immediately and
+refresh the CloudKit value in the background. A first launch with no local copy
+still waits for CloudKit so an empty device cannot overwrite existing history.
+
+Images are included in the JSON as compressed data URLs. Large JSON values are
+stored as CloudKit assets instead of exceeding the record's inline string size.
+If the cloud save succeeds but WebView localStorage is full, the local display
+cache is skipped without reporting the already-completed cloud save as failed.

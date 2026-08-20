@@ -14,6 +14,7 @@ public class LoofCloudPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     private let recordType = "LoofKV"
+    private let inlineValueLimit = 700_000
     private var database: CKDatabase {
         CKContainer(identifier: containerIdentifier).privateCloudDatabase
     }
@@ -64,6 +65,13 @@ public class LoofCloudPlugin: CAPPlugin, CAPBridgedPlugin {
 
             if let value = record?["value"] as? String {
                 call.resolve(["value": value])
+            } else if let asset = record?["asset"] as? CKAsset, let fileURL = asset.fileURL {
+                do {
+                    let value = try String(contentsOf: fileURL, encoding: .utf8)
+                    call.resolve(["value": value])
+                } catch {
+                    call.reject("Could not read saved image data: \(error.localizedDescription)")
+                }
             } else {
                 call.resolve(["value": NSNull()])
             }
@@ -91,10 +99,31 @@ public class LoofCloudPlugin: CAPPlugin, CAPBridgedPlugin {
 
             let record = fetchedRecord ?? CKRecord(recordType: self.recordType, recordID: id)
             record["key"] = key as CKRecordValue
-            record["value"] = value as CKRecordValue
             record["updatedAt"] = Date() as CKRecordValue
 
+            let data = Data(value.utf8)
+            var temporaryURL: URL?
+            if data.count > self.inlineValueLimit {
+                do {
+                    let fileURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("loof-\(UUID().uuidString).json")
+                    try data.write(to: fileURL, options: .atomic)
+                    temporaryURL = fileURL
+                    record["asset"] = CKAsset(fileURL: fileURL)
+                    record["value"] = nil
+                } catch {
+                    call.reject("Could not prepare image data: \(error.localizedDescription)")
+                    return
+                }
+            } else {
+                record["value"] = value as CKRecordValue
+                record["asset"] = nil
+            }
+
             self.database.save(record) { _, saveError in
+                if let temporaryURL {
+                    try? FileManager.default.removeItem(at: temporaryURL)
+                }
                 if let saveError = saveError {
                     call.reject(saveError.localizedDescription)
                     return

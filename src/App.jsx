@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { getFirebaseUser, isGoogleUser, signInWithGoogle, signOutFirebaseUser, subscribeToFirebaseUser } from "./firebase.js";
+import { imageOutputType, storageErrorMessage, validateImageFile } from "./media-utils.js";
+import { canEditAccount, saveProfile } from "./profile-utils.js";
 
 /* ============================================================
    Myposts — 書いて、貼って、読み返す。
@@ -113,25 +116,41 @@ function relShort(iso) {
 
 /* ---------- image compression ---------- */
 function compressImage(file, maxSide = 1280, quality = 0.82) {
+  const validationError = validateImageFile(file);
+  if (validationError) return Promise.reject(new Error(validationError));
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => {
       const img = new Image();
       img.onload = () => {
-        let { width, height } = img;
-        if (width > maxSide || height > maxSide) {
-          const s = maxSide / Math.max(width, height);
-          width = Math.round(width * s); height = Math.round(height * s);
+        try {
+          let { width, height } = img;
+          if (!width || !height) throw new Error("画像のサイズを読み取れませんでした。");
+          if (file.type === "image/gif") {
+            resolve({ src: r.result, w: width, h: height, contentType: file.type });
+            return;
+          }
+          if (width > maxSide || height > maxSide) {
+            const s = maxSide / Math.max(width, height);
+            width = Math.round(width * s); height = Math.round(height * s);
+          }
+          const c = document.createElement("canvas");
+          c.width = width; c.height = height;
+          const context = c.getContext("2d");
+          if (!context) throw new Error("この端末では画像を処理できませんでした。");
+          context.drawImage(img, 0, 0, width, height);
+          const contentType = imageOutputType(file.type);
+          const src = c.toDataURL(contentType, quality);
+          if (!src || src === "data:,") throw new Error("画像の変換に失敗しました。");
+          resolve({ src, w: width, h: height, contentType });
+        } catch (error) {
+          reject(error);
         }
-        const c = document.createElement("canvas");
-        c.width = width; c.height = height;
-        c.getContext("2d").drawImage(img, 0, 0, width, height);
-        resolve({ src: c.toDataURL("image/jpeg", quality), w: width, h: height });
       };
-      img.onerror = reject;
+      img.onerror = () => reject(new Error("この画像形式は端末で読み込めません。JPEG、PNG、WebP、GIFをお試しください。"));
       img.src = r.result;
     };
-    r.onerror = reject;
+    r.onerror = () => reject(new Error("画像ファイルを読み込めませんでした。"));
     r.readAsDataURL(file);
   });
 }
@@ -167,6 +186,123 @@ function ConfirmHost() {
 }
 const askConfirm = (message, o = {}) => _ask ? _ask({ message, ...o }) : Promise.resolve(true);
 const askAlert = (message) => _ask ? _ask({ message, okOnly: true }) : Promise.resolve(true);
+
+const isInteractivePress = target => Boolean(
+  target?.closest?.("button,a,input,textarea,select,label,[role='button'],[contenteditable='true']")
+);
+
+/* ---------- native-feeling route / sheet gestures ---------- */
+function RouteStage({ children, motion = "none", canGoBack = false, onBack, className = "" }) {
+  const [drag, setDrag] = useState(0);
+  const [settling, setSettling] = useState(false);
+  const gesture = useRef({ active: false, axis: null, sx: 0, sy: 0, x: 0, t: 0, vx: 0, dx: 0 });
+  const timer = useRef(null);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const onDown = e => {
+    if (!canGoBack || e.clientX > 28 || settling || isInteractivePress(e.target)) return;
+    gesture.current = { active: true, axis: null, captured: false, sx: e.clientX, sy: e.clientY, x: e.clientX, t: performance.now(), vx: 0, dx: 0 };
+  };
+  const onMove = e => {
+    const g = gesture.current;
+    if (!g.active) return;
+    const dx = Math.max(0, e.clientX - g.sx), dy = e.clientY - g.sy;
+    if (!g.axis) {
+      if (Math.abs(dx) < 7 && Math.abs(dy) < 7) return;
+      g.axis = Math.abs(dx) > Math.abs(dy) * 1.15 ? "x" : "y";
+    }
+    if (g.axis !== "x") return;
+    if (!g.captured) {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      g.captured = true;
+    }
+    const now = performance.now(), dt = Math.max(1, now - g.t);
+    g.vx = (e.clientX - g.x) / dt;
+    g.x = e.clientX; g.t = now;
+    const width = window.innerWidth || 390;
+    g.dx = Math.min(dx, width * .78);
+    setDrag(g.dx);
+  };
+  const finish = () => {
+    const g = gesture.current;
+    if (!g.active) return;
+    g.active = false;
+    if (g.axis !== "x") { g.axis = null; return; }
+    const shouldBack = g.dx > Math.min(92, (window.innerWidth || 390) * .24) || (g.dx > 34 && g.vx > .48);
+    setSettling(true);
+    setDrag(shouldBack ? (window.innerWidth || 390) : 0);
+    timer.current = window.setTimeout(() => {
+      setSettling(false);
+      if (shouldBack) onBack?.();
+    }, shouldBack ? 190 : 220);
+    g.axis = null;
+  };
+  const progress = Math.min(1, drag / Math.max(1, window.innerWidth || 390));
+  return (
+    <div
+      className={`routeStage motion-${motion}${drag ? " routeDragging" : ""}${settling ? " routeSettling" : ""}${className ? ` ${className}` : ""}`}
+      style={{ transform: drag ? `translate3d(${drag}px,0,0)` : undefined, "--route-progress": progress }}
+      onClick={e => e.stopPropagation()}
+      onPointerDown={onDown} onPointerMove={onMove} onPointerUp={finish} onPointerCancel={finish}
+    >
+      {canGoBack && <span className="edgeBackCue" aria-hidden="true"><Back /></span>}
+      {children}
+    </div>
+  );
+}
+
+function SwipeSheet({ children, onClose, className = "" }) {
+  const [drag, setDrag] = useState(0);
+  const [closing, setClosing] = useState(false);
+  const gesture = useRef({ active: false, sy: 0, y: 0, t: 0, vy: 0, dy: 0 });
+  const timer = useRef(null);
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.clearTimeout(timer.current); document.body.style.overflow = previous; };
+  }, []);
+  const dismiss = () => {
+    if (closing) return;
+    setClosing(true);
+    setDrag(window.innerHeight || 900);
+    timer.current = window.setTimeout(() => onClose?.(), 220);
+  };
+  const onDown = e => {
+    if (closing || !e.target.closest?.(".sheetDragZone")) return;
+    gesture.current = { active: true, sy: e.clientY, y: e.clientY, t: performance.now(), vy: 0, dy: 0 };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onMove = e => {
+    const g = gesture.current; if (!g.active) return;
+    const now = performance.now(), dt = Math.max(1, now - g.t);
+    g.vy = (e.clientY - g.y) / dt;
+    g.y = e.clientY; g.t = now;
+    g.dy = Math.max(0, e.clientY - g.sy);
+    setDrag(g.dy);
+  };
+  const finish = () => {
+    const g = gesture.current; if (!g.active) return;
+    g.active = false;
+    if (g.dy > 92 || (g.dy > 24 && g.vy > .52)) dismiss();
+    else setDrag(0);
+  };
+  const sheet = (
+    <div className={`overlay swipeOverlay${closing ? " closing" : ""}`} onClick={dismiss}>
+      <div
+        className={`sheet swipeSheet${closing ? " closing" : ""}${className ? ` ${className}` : ""}`}
+        style={{ transform: drag ? `translate3d(0,${drag}px,0)` : undefined }}
+        role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={finish} onPointerCancel={finish}
+      >
+        <div className="sheetDragZone">
+          <div className="grab" />
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+  return typeof document === "undefined" ? sheet : createPortal(sheet, document.body);
+}
 
 /* ---------- model ---------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -205,6 +341,10 @@ export default function App() {
   const [currentId, setCurrentId, currentLoaded, currentError] = usePersisted("nb.current", "");
 
   const [view, setView] = useState("timeline"); // timeline | compose | accounts
+  const viewRef = useRef("timeline");
+  const routeStack = useRef([]);
+  const [routeMotion, setRouteMotion] = useState("none");
+  const [routeRevision, setRouteRevision] = useState(0);
   const [editId, setEditId] = useState(null);
   const [draft, setDraft] = useState(null);
   const [cpFor, setCpFor] = useState(null); // entry to add to a commonplace
@@ -214,6 +354,37 @@ export default function App() {
   const secondaryEnabled = secondaryLoad || view === "commonplace" || Boolean(cpFor);
   const [collections, setCollections, collectionsLoaded, collectionsError] = usePersisted("nb.collections", [], { enabled: secondaryEnabled });
   const [icloud, setIcloud, icloudLoaded, icloudError] = usePersisted("nb.icloud", false, { enabled: secondaryLoad || view === "about" });
+
+  const commitRoute = useCallback((next, motion) => {
+    viewRef.current = next;
+    setRouteMotion(motion);
+    setRouteRevision(n => n + 1);
+    setView(next);
+  }, []);
+  const navigate = useCallback((next, { tab = false, replace = false } = {}) => {
+    const current = viewRef.current;
+    if (current === next) return;
+    if (tab) routeStack.current = [];
+    else if (!replace) routeStack.current.push(current);
+    commitRoute(next, tab ? "tab" : replace ? "back" : "forward");
+  }, [commitRoute]);
+  const goBack = useCallback((fallback = "timeline") => {
+    const next = routeStack.current.pop() || fallback;
+    commitRoute(next, "back");
+  }, [commitRoute]);
+  useEffect(() => {
+    const onKeyDown = e => {
+      if (e.key !== "Escape") return;
+      if (cpFor) { setCpFor(null); return; }
+      if (dayView) { setDayView(null); return; }
+      if (routeStack.current.length > 0) {
+        if (viewRef.current === "compose") setDraft(null);
+        goBack("timeline");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cpFor, dayView, goBack]);
 
   const account = accounts.find(a => a.id === currentId)
     || accounts.find(a => !a.isAll)
@@ -228,14 +399,14 @@ export default function App() {
   const upsert = useCallback(async (entry) => {
     const next = { ...entry, updatedAt: new Date().toISOString() };
     const result = await window.storage?.saveItem?.("nb.entries", next);
-    if (result && !result.ok) return false;
+    if (result && !result.ok) return { ok: false, error: result.error };
     const stored = result?.item || next;
     setEntries(es => {
       const i = es.findIndex(e => e.id === stored.id);
       if (i === -1) return [stored, ...es];
       const copy = es.slice(); copy[i] = stored; return copy;
     });
-    return true;
+    return { ok: true, item: stored };
   }, [setEntries]);
   const remove = useCallback(async (id) => {
     // 配列の欠落を削除扱いにしない。サーバーで1件のtombstoneが確定してから表示から外す。
@@ -247,15 +418,17 @@ export default function App() {
   const patch = useCallback(async (id, p) => {
     const entry = entries.find(e => e.id === id);
     if (!entry) return false;
-    return upsert({ ...entry, ...p, updatedAt: new Date().toISOString() });
+    const result = await upsert({ ...entry, ...p, updatedAt: new Date().toISOString() });
+    return result.ok;
   }, [entries, upsert]);
   const [aboutBack, setAboutBack] = useState("accounts");
-  const openAbout = (from) => { setAboutBack(from); setView("about"); };
+  const openAbout = (from) => { setAboutBack(from); navigate("about"); };
   const [auth, setAuth] = usePersisted("nb.auth", null, { autoSave: true });
   const [firebaseUser, setFirebaseUser] = useState(undefined);
   const [authBusy, setAuthBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState("loading");
   const [syncMessage, setSyncMessage] = useState("");
+  const writeReady = !isGoogleUser(firebaseUser) || ["background", "connected", "partial"].includes(syncStatus);
 
   useEffect(() => subscribeToFirebaseUser(setFirebaseUser), []);
   useEffect(() => {
@@ -366,7 +539,8 @@ export default function App() {
     try {
       await signOutFirebaseUser();
       setAuth(null);
-      setView("timeline");
+      routeStack.current = [];
+      commitRoute("timeline", "back");
     } catch (_) {
       await askAlert("ログアウトできませんでした。もう一度お試しください。");
     } finally {
@@ -375,19 +549,28 @@ export default function App() {
   };
 
   const realFirst = () => accounts.find(a => !a.isAll) || account;
-  const startCompose = () => { setEditId(null); setDraft(account?.isAll ? newEntry(realFirst().id) : null); setView("compose"); };
-  const openEntry = (id) => { setDraft(null); setEditId(id); setView("compose"); };
+  const explainSyncWait = () => { void askAlert("最新の記録を確認中です。同期が終わるまで閲覧のみ利用できます。"); };
+  const startCompose = () => {
+    if (!writeReady) { explainSyncWait(); return; }
+    setEditId(null); setDraft(account?.isAll ? newEntry(realFirst().id) : null); navigate("compose");
+  };
+  const openEntry = (id) => {
+    if (!writeReady) { explainSyncWait(); return; }
+    setDraft(null); setEditId(id); navigate("compose");
+  };
   const quote = (entry) => {
+    if (!writeReady) { explainSyncWait(); return; }
     const acc = accounts.find(a => a.id === entry.accountId) || account;
     const target = account?.isAll ? realFirst().id : currentId;
     setDraft({ ...newEntry(target), blocks: [{ id: uid(), type: "text", value: "" }, quoteBlockFrom(entry, acc)] });
-    setEditId(null); setView("compose");
+    setEditId(null); navigate("compose");
   };
   const saveAccount = async (acc) => {
     const next = { ...acc, updatedAt: new Date().toISOString() };
     const result = await saveStoredItem("nb.accounts", next);
     if (!result.ok) {
-      await askAlert("プロフィールを保存できませんでした。接続を確認してもう一度お試しください。");
+      console.error(`[loof profile] save-result-failed accountId=${next.id} message=${result.error?.message || String(result.error || "保存に失敗しました")}`);
+      await askAlert(storageErrorMessage(result.error, "プロフィールを保存できませんでした。もう一度お試しください。"));
       return false;
     }
     const stored = result.item;
@@ -450,33 +633,51 @@ export default function App() {
     <div style={S.root} className="root">
       <style>{CSS}</style>
       <ConfirmHost />
-      {loggedInWithGoogle && <div className="syncPill">{syncStatus === "connected" ? "☁ Firestore 同期中" : "☁ Firestore に接続中…"}</div>}
+      {loggedInWithGoogle && syncStatus !== "connected" && (
+        <div className={`syncPill${syncStatus === "partial" || syncStatus === "error" ? " warn" : ""}`}>
+          {syncStatus === "background"
+            ? "☁ 過去の記録を読み込み中…"
+            : syncStatus === "partial"
+              ? "☁ 一部の履歴を同期できません"
+              : syncStatus === "error"
+                ? "☁ 同期できません"
+                : "☁ 最新の記録を確認中（閲覧のみ）"}
+        </div>
+      )}
 
       <Navigation
         account={account}
         view={view}
-        onTimeline={() => setView("timeline")}
-        onProfile={() => setView("profile")}
-        onCommonplace={() => setView("commonplace")}
-        onAccounts={() => setView("accounts")}
+        onTimeline={() => navigate("timeline", { tab: true })}
+        onProfile={() => navigate("profile", { tab: true })}
+        onCommonplace={() => navigate("commonplace", { tab: true })}
+        onAccounts={() => navigate("accounts", { tab: true })}
         onCompose={startCompose}
+        writeReady={writeReady}
       />
 
       <div className="mainCol">
+      <RouteStage
+        key={routeRevision}
+        motion={routeMotion}
+        canGoBack={routeStack.current.length > 0 && !dayView && !cpFor}
+        onBack={() => { if (view === "compose") setDraft(null); goBack("timeline"); }}
+      >
       {view === "timeline" && (
         <Timeline
           account={account}
           accounts={accounts}
           entries={accEntries}
           onCompose={startCompose}
+          writeReady={writeReady}
           onOpen={openEntry}
           onPatch={patch}
           onPostDelete={remove}
           onQuote={quote}
           onAddCommonplace={setCpFor}
-          onSwitch={() => setView("accounts")}
-          onProfile={() => setView("profile")}
-          onCommonplace={() => setView("commonplace")}
+          onSwitch={() => navigate("accounts")}
+          onProfile={() => navigate("profile")}
+          onCommonplace={() => navigate("commonplace")}
           onCopyDay={(items) => copyText(items.map(entryPlainText).filter(Boolean).join("\n\n— — —\n\n"))}
         />
       )}
@@ -488,13 +689,13 @@ export default function App() {
           initial={editing || draft || newEntry(currentId)}
           isNew={!editing}
           onSave={async (e) => {
-            if (entryEmpty(e)) { setDraft(null); setView("timeline"); return true; }
-            const saved = await upsert(e);
-            if (saved) { setDraft(null); setView("timeline"); }
-            return saved;
+            if (entryEmpty(e)) { setDraft(null); goBack("timeline"); return true; }
+            const result = await upsert(e);
+            if (result.ok) { setDraft(null); goBack("timeline"); }
+            return result;
           }}
-          onCancel={() => { setDraft(null); setView("timeline"); }}
-          onDelete={editing ? async () => { if (await remove(editing.id)) setView("timeline"); } : null}
+          onCancel={() => { setDraft(null); goBack("timeline"); }}
+          onDelete={editing ? async () => { if (await remove(editing.id)) goBack("timeline"); } : null}
           onCopy={(e) => copyText(entryPlainText(e))}
         />
       )}
@@ -504,14 +705,14 @@ export default function App() {
           accounts={accounts} setAccounts={setAccounts}
           currentId={currentId} setCurrentId={setCurrentIdPersisted}
           entries={entries} setEntries={setEntries}
-          onProfile={() => setView("profile")}
+          onProfile={() => navigate("profile", { tab: true })}
           onAbout={() => openAbout("accounts")}
-          onClose={() => setView("timeline")}
+          onClose={() => goBack("timeline")}
         />
       )}
 
       {view === "about" && (
-        <About icloud={icloud} setIcloud={setIcloudPersisted} user={firebaseUser} onGoogle={beginGoogle} onLogout={logout} busy={authBusy} onClose={() => setView(aboutBack)} />
+        <About icloud={icloud} setIcloud={setIcloudPersisted} user={firebaseUser} onGoogle={beginGoogle} onLogout={logout} busy={authBusy} onClose={() => goBack(aboutBack)} />
       )}
 
       {view === "profile" && (
@@ -523,7 +724,7 @@ export default function App() {
           onOpen={openEntry}
           onAbout={() => openAbout("profile")}
           onPatch={patch} onPostDelete={remove} onQuote={quote} onAddCommonplace={setCpFor}
-          onClose={() => setView("timeline")}
+          onClose={() => goBack("timeline")}
         />
       )}
 
@@ -533,9 +734,10 @@ export default function App() {
           onCreate={createCollection}
           onOpenEntry={openEntry} onPatch={patch} onPostDelete={remove} onQuote={quote} onAddCommonplace={setCpFor}
           onOpenDay={(date) => setDayView({ date })}
-          onClose={() => setView("timeline")}
+          onClose={() => goBack("timeline")}
         />
       )}
+      </RouteStage>
       </div>
 
       <Sidebar account={account} entries={account?.isAll ? entries : entries.filter(e => e.accountId === currentId)} allEntries={entries} onOpenEntry={openEntry} />
@@ -543,10 +745,10 @@ export default function App() {
       {view !== "compose" && (
         <MobileNavigation
           view={view}
-          onTimeline={() => setView("timeline")}
-          onProfile={() => setView("profile")}
-          onCommonplace={() => setView("commonplace")}
-          onAccounts={() => setView("accounts")}
+          onTimeline={() => navigate("timeline", { tab: true })}
+          onProfile={() => navigate("profile", { tab: true })}
+          onCommonplace={() => navigate("commonplace", { tab: true })}
+          onAccounts={() => navigate("accounts", { tab: true })}
         />
       )}
 
@@ -574,7 +776,7 @@ export default function App() {
 /* ============================================================
    TIMELINE — day-grouped thread
    ============================================================ */
-function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPostDelete, onQuote, onAddCommonplace, onSwitch, onProfile, onCommonplace, onCopyDay }) {
+function Timeline({ account, accounts, entries, onCompose, writeReady, onOpen, onPatch, onPostDelete, onQuote, onAddCommonplace, onSwitch, onProfile, onCommonplace, onCopyDay }) {
   const [q, setQ] = useState("");
   const [jumpDate, setJumpDate] = useState(null);
   const [showAll, setShowAll] = useState(false);
@@ -599,6 +801,11 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
     [filtered]
   );
   const mediaCount = useMemo(() => entries.reduce((n, e) => n + e.blocks.filter(b => b.type === "image").length, 0), [entries]);
+  const switchMode = next => {
+    if (showAll === next) return;
+    setShowAll(next);
+    navigator.vibrate?.(4);
+  };
 
   return (
     <div className="screen">
@@ -631,8 +838,8 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
       </div>
 
       <nav className="timelineTabs" aria-label="タイムライン表示">
-        <button className={!showAll ? "on" : ""} onClick={() => setShowAll(false)}><span>日ごと</span></button>
-        <button className={showAll ? "on" : ""} onClick={() => setShowAll(true)}><span>すべて</span></button>
+        <button className={!showAll ? "on" : ""} onClick={() => switchMode(false)} aria-selected={!showAll}><span>日ごと</span></button>
+        <button className={showAll ? "on" : ""} onClick={() => switchMode(true)} aria-selected={showAll}><span>すべて</span></button>
       </nav>
 
       <div className="searchWrap">
@@ -647,20 +854,25 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
         </label>
       </div>
 
+      <div className="timelineContent" key={showAll ? "all" : q.trim() ? "search" : "days"}>
       {showAll ? (
         <main className="feed allPostsFeed">
           <div className="allPostsHead">
-            <span>すべての記録</span><span>{allItems.length}件</span>
+            <span>すべての記録</span>
+            <div className="allPostsTools">
+              <span>{allItems.length}件</span>
+              {allItems.length > 0 && <button className="dayCopy" onClick={() => onCopyDay(allItems)}>表示中をコピー</button>}
+            </div>
           </div>
           {allItems.length === 0
-            ? <div className="empty"><div className="emptyMark"><GhostMark size={40} /></div>{q.trim() ? "見つかりませんでした。" : "まだ何もありません。"}</div>
+            ? <div className="empty">{q.trim() ? "見つかりませんでした。" : "まだ何もありません。"}</div>
             : allItems.map(e => <PostCard key={e.id} entry={e} account={acctFor(e)} onOpen={onOpen} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
           <div style={{ height: 96 }} />
         </main>
       ) : q.trim() ? (
         <main className="feed">
           {days.length === 0
-            ? <div className="empty"><div className="emptyMark"><GhostMark size={40} /></div>見つかりませんでした。</div>
+            ? <div className="empty">見つかりませんでした。</div>
             : days.map(d => (
               <section className="day" key={d.date}>
                 <div className="dayHead">
@@ -680,15 +892,15 @@ function Timeline({ account, accounts, entries, onCompose, onOpen, onPatch, onPo
       ) : days.length === 0 ? (
         <main className="feed">
           <div className="empty">
-            <div className="emptyMark"><GhostMark size={40} /></div>
             まだ何もありません。<br />ポストボタンから書きはじめましょう。
           </div>
         </main>
       ) : (
         <DayPager days={days} acctFor={acctFor} jumpDate={jumpDate} onOpen={onOpen} onCopyDay={onCopyDay} onPatch={onPatch} onPostDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />
       )}
+      </div>
 
-      <button className="fab" onClick={onCompose} aria-label="書く"><Plus /></button>
+      <button className="fab" onClick={onCompose} disabled={!writeReady} aria-label={writeReady ? "書く" : "同期完了後に書くことができます"}><Plus /></button>
     </div>
   );
 }
@@ -700,7 +912,7 @@ function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostD
   const [index, setIndex] = useState(0);
   const [drag, setDrag] = useState(0);
   const [anim, setAnim] = useState(true);
-  const g = useRef({ down: false, sx: 0, sy: 0, axis: null });
+  const g = useRef({ down: false, sx: 0, sy: 0, axis: null, x: 0, t: 0, vx: 0, dx: 0 });
 
   useEffect(() => {
     const el = wrapRef.current; if (!el) return;
@@ -722,24 +934,42 @@ function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostD
   const clamp = i => Math.max(0, Math.min(days.length - 1, i));
   const go = i => { setAnim(true); setIndex(c => clamp(typeof i === "function" ? i(c) : i)); };
 
-  const onDown = e => { g.current = { down: true, sx: e.clientX, sy: e.clientY, axis: null }; setAnim(false); };
+  const onDown = e => {
+    if ((e.button != null && e.button !== 0) || isInteractivePress(e.target)) {
+      g.current.down = false;
+      return;
+    }
+    g.current = { down: true, captured: false, sx: e.clientX, sy: e.clientY, axis: null, x: e.clientX, t: performance.now(), vx: 0, dx: 0 };
+    setAnim(false);
+  };
   const onMove = e => {
     const s = g.current; if (!s.down) return;
-    const dx = e.clientX - s.sx, dy = e.clientY - s.sy;
+    let dx = e.clientX - s.sx; const dy = e.clientY - s.sy;
     if (!s.axis) {
-      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) s.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (Math.abs(dx) > 7 || Math.abs(dy) > 7) s.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? "x" : "y";
       else return;
     }
     if (s.axis === "y") return;
+    if (!s.captured) {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      s.captured = true;
+    }
+    const now = performance.now(), dt = Math.max(1, now - s.t);
+    s.vx = (e.clientX - s.x) / dt;
+    s.x = e.clientX; s.t = now;
+    if ((index === 0 && dx > 0) || (index === days.length - 1 && dx < 0)) dx *= .28;
+    s.dx = dx;
     setDrag(dx);
   };
   const end = () => {
     const s = g.current; if (!s.down) return; s.down = false; setAnim(true);
+    let changed = false;
     if (s.axis === "x") {
-      const th = Math.max(48, w * 0.18);
-      if (drag <= -th) setIndex(i => clamp(i + 1));
-      else if (drag >= th) setIndex(i => clamp(i - 1));
+      const th = Math.max(42, w * 0.14);
+      if ((s.dx <= -th || (s.dx < -24 && s.vx < -.42)) && index < days.length - 1) { setIndex(i => clamp(i + 1)); changed = true; }
+      else if ((s.dx >= th || (s.dx > 24 && s.vx > .42)) && index > 0) { setIndex(i => clamp(i - 1)); changed = true; }
     }
+    if (changed) navigator.vibrate?.(5);
     setDrag(0); s.axis = null;
   };
 
@@ -761,7 +991,7 @@ function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostD
       <div
         className="track"
         style={{ transform: `translate3d(${tx}px,0,0)`, transition: anim ? "transform .28s cubic-bezier(.2,.8,.2,1)" : "none" }}
-        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={end} onPointerCancel={end} onPointerLeave={end}
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={end} onPointerCancel={end}
       >
         {days.map(d => (
           <div className="page" key={d.date}>
@@ -776,7 +1006,7 @@ function DayPager({ days, acctFor, jumpDate, onOpen, onCopyDay, onPatch, onPostD
 
       <div className="dots">
         {days.length <= 14
-          ? days.map((_, i) => <span key={i} className={"dot" + (i === index ? " on" : "")} onClick={() => go(i)} />)
+          ? days.map((d, i) => <button key={d.date} className={"dot" + (i === index ? " on" : "")} onClick={() => go(i)} aria-label={`${fmtDayHead(d.date).big}へ移動`} aria-current={i === index ? "date" : undefined} />)
           : <span className="dotCount">{index + 1} / {days.length}</span>}
       </div>
     </div>
@@ -880,12 +1110,20 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
   const [pickAcct, setPickAcct] = useState(false);
   const [focusIdx, setFocusIdx] = useState(0);
   const fileRef = useRef(null);
+  const toastTimer = useRef(null);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageStatus, setImageStatus] = useState("");
   const account = accounts.find(a => a.id === acctId) || accounts[0];
   const canPost = blocks.some(b => b.type === "image" || b.type === "quote" || (b.type === "text" && b.value.trim()));
 
-  const showToast = (m) => { setToast(m); setTimeout(() => setToast(""), 1400); };
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+  const showToast = (m, duration = 3600) => {
+    window.clearTimeout(toastTimer.current);
+    setToast(m);
+    toastTimer.current = window.setTimeout(() => setToast(""), duration);
+  };
 
   const setText = (id, value) =>
     setBlocks(bs => bs.map(b => b.id === id ? { ...b, value } : b));
@@ -901,47 +1139,71 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
 
   // insert image(s) after the currently focused block; keep a trailing text block
   const addImages = async (fileList) => {
-    const files = [...fileList].slice(0, 8);
-    const made = [];
-    for (const f of files) {
-      try { const r = await compressImage(f); made.push({ id: uid(), type: "image", src: r.src, w: r.w, h: r.h, caption: "" }); } catch (_) {}
+    if (imageBusy) return;
+    const remaining = Math.max(0, 20 - blocks.filter(block => block.type === "image").length);
+    const files = [...fileList].slice(0, Math.min(8, remaining));
+    if (!files.length) {
+      showToast("画像は1つの投稿につき20枚までです。");
+      return;
     }
-    if (!made.length) return;
-    setBlocks(bs => {
-      const at = Math.min(Math.max(focusIdx, 0), bs.length - 1);
-      const head = bs.slice(0, at + 1);
-      const tail = bs.slice(at + 1);
-      let next = [...head, ...made, ...tail];
-      if (next[next.length - 1].type !== "text")
-        next = [...next, { id: uid(), type: "text", value: "" }];
-      return next;
-    });
+    const made = [];
+    const failures = [];
+    setImageBusy(true);
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      setImageStatus(`画像を処理中… ${index + 1}/${files.length}`);
+      try {
+        const r = await compressImage(file);
+        made.push({ id: uid(), type: "image", src: r.src, w: r.w, h: r.h, caption: "" });
+      } catch (error) {
+        failures.push(`${file.name || `画像${index + 1}`}: ${error?.message || "読み込めませんでした"}`);
+      }
+    }
+    if (made.length) {
+      setBlocks(bs => {
+        const at = Math.min(Math.max(focusIdx, 0), bs.length - 1);
+        const head = bs.slice(0, at + 1);
+        const tail = bs.slice(at + 1);
+        let next = [...head, ...made, ...tail];
+        if (next[next.length - 1].type !== "text")
+          next = [...next, { id: uid(), type: "text", value: "" }];
+        return next;
+      });
+    }
+    setImageBusy(false);
+    setImageStatus("");
+    if (failures.length) showToast(failures.slice(0, 2).join("\n"));
   };
 
-  const onPick = (e) => { const files = [...(e.target.files || [])]; e.target.value = ""; if (files.length) addImages(files); };
+  const onPick = (e) => { const files = [...(e.target.files || [])]; e.target.value = ""; if (files.length) void addImages(files); };
 
   const handlePaste = (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
     const imgs = [...items].filter(it => it.type.startsWith("image/")).map(it => it.getAsFile()).filter(Boolean);
-    if (imgs.length) { e.preventDefault(); addImages(imgs); }
+    if (imgs.length) { e.preventDefault(); void addImages(imgs); }
   };
 
   const save = async () => {
-    if (saving) return;
+    if (saving || imageBusy) return;
     const trimmed = blocks
       .filter((b, i) => !(b.type === "text" && !b.value.trim()) || blocks.filter(x => x.type === "text").length === 1)
       .map(b => b.type === "text" ? { ...b, value: b.value.replace(/\s+$/,"") } : b);
     setSaving(true);
     let saved = false;
+    let saveError;
     try {
-      saved = await onSave({ ...initial, accountId: acctId, blocks: trimmed.length ? trimmed : blankBlocks(), updatedAt: new Date().toISOString() });
-    } catch (_) {
+      const result = await onSave({ ...initial, accountId: acctId, blocks: trimmed.length ? trimmed : blankBlocks(), updatedAt: new Date().toISOString() });
+      saved = result === true || result?.ok === true;
+      saveError = result?.error;
+    } catch (error) {
       saved = false;
+      saveError = error;
+      console.error("[loof entry] save-failed", error);
     }
     if (!saved) {
       setSaving(false);
-      showToast("保存できませんでした。接続を確認してもう一度保存してください。");
+      showToast(storageErrorMessage(saveError));
     }
   };
 
@@ -950,7 +1212,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
       <header className="topbar compTop">
         <button className="txtbtn composeCancel" onClick={onCancel}>キャンセル</button>
         <span style={{ flex: 1 }} />
-        <button className="postBtn" disabled={saving || !canPost} onClick={save}>{saving ? "送信中…" : "ポスト"}</button>
+        <button className="postBtn" disabled={saving || imageBusy || !canPost} onClick={save}>{imageBusy ? "画像処理中…" : saving ? "送信中…" : "ポスト"}</button>
       </header>
 
       <main className="editor" onPaste={handlePaste}>
@@ -992,7 +1254,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
       </main>
 
       <div className="toolbar">
-        <button className="tool" onClick={() => fileRef.current?.click()}><ImageIcon /> 画像をここに差し込む</button>
+        <button className="tool" disabled={imageBusy} onClick={() => fileRef.current?.click()}><ImageIcon /> {imageStatus || "画像をここに差し込む"}</button>
         <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPick} />
         <div className="toolRight">
           <button className="tool ghost" onClick={async () => { if (await onCopy({ ...initial, blocks })) showToast("本文をコピーしました"); }}>全文コピー</button>
@@ -1000,12 +1262,10 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
         </div>
       </div>
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
 
       {pickAcct && (
-        <div className="overlay" onClick={() => setPickAcct(false)}>
-          <div className="sheet" onClick={e => e.stopPropagation()}>
-            <div className="grab" />
+        <SwipeSheet onClose={() => setPickAcct(false)}>
             <div className="sheetTitle">保存先のノート</div>
             <div className="sheetBody" style={{ paddingTop: 0 }}>
               {accounts.filter(a => !a.isAll).map(a => (
@@ -1020,8 +1280,7 @@ function Composer({ accounts, initial, isNew, onSave, onCancel, onDelete, onCopy
               ))}
               {!isNew && <div className="pickHint">保存先を変えると、この記録は選んだノートに移動します。</div>}
             </div>
-          </div>
-        </div>
+        </SwipeSheet>
       )}
     </div>
   );
@@ -1059,7 +1318,7 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
     const next = { ...acc, updatedAt: new Date().toISOString() };
     const result = await window.storage?.saveItem?.("nb.accounts", next);
     if (result && !result.ok) {
-      await askAlert("ノートを保存できませんでした。接続を確認してもう一度お試しください。");
+      await askAlert(storageErrorMessage(result.error, "ノートを保存できませんでした。もう一度お試しください。"));
       return false;
     }
     const stored = result?.item || next;
@@ -1113,7 +1372,7 @@ function Accounts({ accounts, setAccounts, currentId, setCurrentId, entries, set
                 <span className="acctRowSub">{(a.isAll ? entries.length : (counts[a.id] || 0))} 件{a.id === currentId ? " ・ 使用中" : ""}</span>
               </span>
             </button>
-            <button className="iconBtn sm" onClick={() => setEditing(a)} aria-label="編集"><Pencil /></button>
+            {canEditAccount(a) && <button className="iconBtn sm" onClick={() => setEditing(a)} aria-label="編集"><Pencil /></button>}
           </div>
         ))}
         <button className="addAcct" onClick={() => setEditing({ ...newAccount(""), _new: true })}>
@@ -1152,8 +1411,8 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
     try {
       const r = await compressImage(f, 300, 0.85);
       setIcon(r.src);
-    } catch (_) {
-      setImageError("画像を読み込めませんでした。別の画像を選んでください。");
+    } catch (error) {
+      setImageError(error?.message || "画像を読み込めませんでした。別の画像を選んでください。");
     } finally {
       setImageBusy(false);
     }
@@ -1165,8 +1424,8 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
     try {
       const r = await compressImage(f, 1000, 0.8);
       setCover(r.src);
-    } catch (_) {
-      setImageError("画像を読み込めませんでした。別の画像を選んでください。");
+    } catch (error) {
+      setImageError(error?.message || "画像を読み込めませんでした。別の画像を選んでください。");
     } finally {
       setImageBusy(false);
     }
@@ -1174,13 +1433,17 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
   const submit = async () => {
     if (saving || imageBusy) return;
     setSaving(true);
-    const ok = await onSave({ ...account, name: name.trim(), handle: handle.trim(), icon, bio, cover, _new: undefined });
-    if (ok === false) setSaving(false);
+    try {
+      const ok = await onSave({ ...account, name: name.trim(), handle: handle.trim(), icon, bio, cover, _new: undefined });
+      if (ok !== true) setSaving(false);
+    } catch (error) {
+      console.error("[loof profile] save-failed", error);
+      setSaving(false);
+      await askAlert(storageErrorMessage(error, "プロフィールを保存できませんでした。もう一度お試しください。"));
+    }
   };
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
-        <div className="grab" />
+    <SwipeSheet onClose={onClose} className="accountEditSheet">
         <div className="sheetTitle">{isNew ? "新しいノート" : "プロフィールを編集"}</div>
         <div className="sheetBody">
           <label className="coverPick" style={cover ? { backgroundImage: `url(${cover})` } : null} aria-label="ヘッダー画像を変更">
@@ -1210,8 +1473,7 @@ function AccountSheet({ account, isNew, onSave, onDelete, onClose }) {
           </button>
           {onDelete && <button className="deleteLink" onClick={onDelete}>このノートを削除</button>}
         </div>
-      </div>
-    </div>
+    </SwipeSheet>
   );
 }
 
@@ -1237,7 +1499,7 @@ function Profile({ account, accounts, entries, onSave, onOpen, onAbout, onPatch,
         <div className="profBody">
           <div className="profRow1">
             <span className="profAvatar"><Avatar account={account} size={84} /></span>
-            <button className="editProfile" onClick={() => setEdit(true)}>プロフィールを編集</button>
+            {canEditAccount(account) && <button className="editProfile" onClick={() => setEdit(true)}>プロフィールを編集</button>}
           </div>
           <div className="profName">{accLabel(account)} <Lock /></div>
           {account.handle && <div className="profHandle">@{account.handle}</div>}
@@ -1252,7 +1514,7 @@ function Profile({ account, accounts, entries, onSave, onOpen, onAbout, onPatch,
           <div style={{ height: 60 }} />
         </div>
       </div>
-      {edit && <AccountSheet account={account} isNew={false} onSave={async (a) => { if (await onSave(a)) setEdit(false); }} onDelete={null} onClose={() => setEdit(false)} />}
+      {edit && <AccountSheet account={account} isNew={false} onSave={(a) => saveProfile(onSave, a, () => setEdit(false))} onDelete={null} onClose={() => setEdit(false)} />}
     </div>
   );
 }
@@ -1372,9 +1634,7 @@ function Commonplace({ accounts, entries, collections, setCollections, onCreate,
 function CommonplacePicker({ entry, collections, onAdd, onCreate, onClose }) {
   const [name, setName] = useState("");
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
-        <div className="grab" />
+    <SwipeSheet onClose={onClose}>
         <div className="sheetTitle">コモンプレイスに追加</div>
         <div className="sheetBody">
           {collections.length > 0 && <div className="fieldLabel">既存のまとめ</div>}
@@ -1390,8 +1650,7 @@ function CommonplacePicker({ entry, collections, onAdd, onCreate, onClose }) {
             <button className="primary" style={{ width: "auto", padding: "0 18px", flexShrink: 0 }} disabled={!name.trim()} onClick={() => onCreate(name)}>作成</button>
           </div>
         </div>
-      </div>
-    </div>
+    </SwipeSheet>
   );
 }
 
@@ -1409,7 +1668,7 @@ function DayView({ date, accounts, entries, currentId, onOpenEntry, onPatch, onP
   const head = fmtDayHead(date);
   return (
     <div className="overlay" onClick={onClose} style={{ alignItems: "stretch" }}>
-      <div className="fullPane" onClick={e => e.stopPropagation()}>
+      <RouteStage className="fullPane" motion="forward" canGoBack onBack={onClose}>
         <header className="topbar">
           <button className="iconBtn" onClick={onClose}><Back /></button>
           <div className="profTopName">
@@ -1432,7 +1691,7 @@ function DayView({ date, accounts, entries, currentId, onOpenEntry, onPatch, onP
             : items.map(e => <PostCard key={e.id} entry={e} account={accOf(e.accountId)} onOpen={onOpenEntry} onPatch={onPatch} onDelete={onPostDelete} onQuote={onQuote} onAddCommonplace={onAddCommonplace} />)}
           <div style={{ height: 40 }} />
         </div>
-      </div>
+      </RouteStage>
     </div>
   );
 }
@@ -1494,18 +1753,17 @@ function About({ icloud, setIcloud, user, onGoogle, onLogout, busy, onClose }) {
 /* ============================================================
    APP NAVIGATION — X-style desktop rail + mobile tab bar
    ============================================================ */
-function Navigation({ account, view, onTimeline, onProfile, onCommonplace, onAccounts, onCompose }) {
+function Navigation({ account, view, onTimeline, onProfile, onCommonplace, onAccounts, onCompose, writeReady }) {
   return (
     <aside className="leftNav" aria-label="メインナビゲーション">
       <div className="leftNavInner">
-        <button className="brandMark" onClick={onTimeline} aria-label="Myposts ホーム"><GhostMark size={34} /></button>
         <nav className="navLinks">
           <NavButton label="ホーム" active={view === "timeline"} icon={<HomeIcon />} onClick={onTimeline} />
           <NavButton label="プロフィール" active={view === "profile"} icon={<UserIcon />} onClick={onProfile} />
           <NavButton label="コモンプレイス" active={view === "commonplace"} icon={<Layers />} onClick={onCommonplace} />
           <NavButton label="ノート" active={view === "accounts"} icon={<NotebookIcon />} onClick={onAccounts} />
         </nav>
-        <button className="navCompose" onClick={onCompose}><Pencil /><span>ポストする</span></button>
+        <button className="navCompose" onClick={onCompose} disabled={!writeReady}><Pencil /><span>{writeReady ? "ポストする" : "同期中…"}</span></button>
         <button className="navAccount" onClick={onAccounts} aria-label="ノートを切り替え">
           <Avatar account={account} size={42} />
           <span className="navAccountText"><b>{accLabel(account)}</b><small>{account.handle ? `@${account.handle}` : "プライベート"}</small></span>
@@ -1517,16 +1775,17 @@ function Navigation({ account, view, onTimeline, onProfile, onCommonplace, onAcc
 }
 
 function NavButton({ label, active, icon, onClick }) {
-  return <button className={"navButton" + (active ? " on" : "")} onClick={onClick}>{icon}<span>{label}</span></button>;
+  return <button className={"navButton" + (active ? " on" : "")} aria-current={active ? "page" : undefined} onClick={onClick}>{icon}<span>{label}</span></button>;
 }
 
 function MobileNavigation({ view, onTimeline, onProfile, onCommonplace, onAccounts }) {
+  const tap = fn => () => { navigator.vibrate?.(4); fn(); };
   return (
     <nav className="mobileNav" aria-label="メインナビゲーション">
-      <button className={view === "timeline" ? "on" : ""} onClick={onTimeline} aria-label="ホーム"><HomeIcon /></button>
-      <button className={view === "profile" ? "on" : ""} onClick={onProfile} aria-label="プロフィール"><UserIcon /></button>
-      <button className={view === "commonplace" ? "on" : ""} onClick={onCommonplace} aria-label="コモンプレイス"><Layers /></button>
-      <button className={view === "accounts" ? "on" : ""} onClick={onAccounts} aria-label="ノート"><NotebookIcon /></button>
+      <button className={view === "timeline" ? "on" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={tap(onTimeline)} aria-label="ホーム"><HomeIcon /></button>
+      <button className={view === "profile" ? "on" : ""} aria-current={view === "profile" ? "page" : undefined} onClick={tap(onProfile)} aria-label="プロフィール"><UserIcon /></button>
+      <button className={view === "commonplace" ? "on" : ""} aria-current={view === "commonplace" ? "page" : undefined} onClick={tap(onCommonplace)} aria-label="コモンプレイス"><Layers /></button>
+      <button className={view === "accounts" ? "on" : ""} aria-current={view === "accounts" ? "page" : undefined} onClick={tap(onAccounts)} aria-label="ノート"><NotebookIcon /></button>
     </nav>
   );
 }
@@ -1601,23 +1860,6 @@ function Login({ onGoogle, onGuest, busy }) {
   );
 }
 
-/* ---------- ghost mark (default avatar) ---------- */
-const GHOST_COLOR = "#3B2A6E";
-function GhostMark({ size = 40 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true">
-      <path
-        d="M18 50 V30 C18 18.5 24 12 32 12 C40 12 46 18.5 46 30 V50
-           C44.3 53 42.6 53 41 50 C39.4 47 37.6 47 36 50 C34.4 53 32.6 53 31 50
-           C29.4 47 27.6 47 26 50 C24.4 53 22.6 53 21 50 C20 48.4 19 48.4 18 50 Z"
-        fill="#fff" stroke={GHOST_COLOR} strokeWidth="4.6" strokeLinejoin="round" strokeLinecap="round"
-      />
-      <circle cx="26.5" cy="33" r="3.4" fill={GHOST_COLOR} />
-      <circle cx="37.5" cy="33" r="3.4" fill={GHOST_COLOR} />
-    </svg>
-  );
-}
-
 /* ---------- avatar ---------- */
 function Avatar({ account, size = 32 }) {
   if (account?.icon) {
@@ -1668,13 +1910,14 @@ const S = {
 
 const CSS = `
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-body{margin:0;background:#fff;font-weight:400;}
+body{margin:0;background:#fff;font-weight:400;overscroll-behavior-y:none;
+  font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP','Segoe UI',sans-serif;}
 html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;}
 button{font-family:inherit;cursor:pointer;font-weight:600;}
 input,textarea{font-family:inherit;font-weight:400;}
 button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid ${BL};outline-offset:2px;}
 
-.screen{width:100%;max-width:none;margin:0;min-height:100dvh;position:relative;display:flex;flex-direction:column;background:#fff;}
+.screen{width:100%;max-width:none;margin:0;min-height:100dvh;position:relative;display:flex;flex-direction:column;background:#fff;overscroll-behavior-y:contain;}
 
 /* top bar */
 .topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
@@ -1714,7 +1957,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 
 .thread{position:relative;}
 .xpost{display:flex;gap:10px;padding:12px 16px 5px;border-bottom:1px solid ${LINE};cursor:pointer;
-  font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP','Segoe UI',sans-serif;}
+  font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP','Segoe UI',sans-serif;transition:background-color .16s ease,transform .16s ease;}
 .xpost:hover{background:rgba(0,0,0,.025);}
 .xpost:active{background:#F7F9F9;}
 .xAvatar{flex-shrink:0;padding-top:2px;}
@@ -1736,7 +1979,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .xActions{display:flex;align-items:center;margin-top:7px;max-width:430px;color:${MUT};}
 .xActWrap{position:relative;display:inline-flex;}
 .xAct{display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:${MUT};font-size:13px;font-weight:400;
-  height:34px;padding:0 2px;min-width:34px;justify-content:flex-start;border-radius:999px;}
+  height:34px;padding:0 2px;min-width:34px;justify-content:flex-start;border-radius:999px;transition:color .16s ease,background-color .16s ease,transform .12s ease;}
 .xAct svg{width:18px;height:18px;}
 .xAct:hover,.xAct:active{color:${BL};background:rgba(29,155,240,.1);}
 .xAct.rt:hover{color:${RTC};background:rgba(0,186,124,.1);}
@@ -1744,13 +1987,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .xAct.like{color:${LK};}
 .xAct.rt{color:${RTC};}
 .xAct.bm{color:${BL};}
+.xAct:active{transform:scale(.78);}
+.xAct.like svg,.xAct.bm svg{animation:reactionPop .25s cubic-bezier(.2,1.5,.4,1);}
+@keyframes reactionPop{0%{transform:scale(.55);}70%{transform:scale(1.18);}100%{transform:scale(1);}}
 .xCnt{font-size:13px;}
 .xSpacer{flex:1;}
 
 /* popover menus */
 .menuBackdrop{position:fixed;inset:0;z-index:40;}
 .menu{position:absolute;z-index:41;background:#fff;border:1px solid ${LINE};border-radius:16px;
-  box-shadow:0 10px 30px rgba(0,0,0,.16),0 2px 8px rgba(0,0,0,.08);padding:6px;min-width:180px;}
+  box-shadow:0 10px 30px rgba(0,0,0,.16),0 2px 8px rgba(0,0,0,.08);padding:6px;min-width:180px;animation:menuIn .16s cubic-bezier(.2,.9,.3,1);transform-origin:top right;}
+@keyframes menuIn{from{opacity:0;transform:scale(.92) translateY(-4px);}to{opacity:1;transform:none;}}
 .kebabMenu{top:32px;right:0;}
 .rtMenu{bottom:38px;left:0;}
 .menuItem{display:flex;align-items:center;gap:14px;width:100%;background:none;border:none;
@@ -1774,7 +2021,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 
 /* empty */
 .empty{text-align:center;color:${SUB};font-size:13.5px;line-height:2;padding:64px 24px;font-weight:600;}
-.emptyMark{display:grid;place-items:center;width:74px;height:74px;margin:0 auto 20px;border:1px solid ${LINE};border-radius:50%;background:#fff;}
 
 /* swipe pager */
 .pager{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:#fff;}
@@ -1786,20 +2032,21 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .pagerDate{flex:1;text-align:center;min-width:0;}
 .pgBig{font-size:16px;font-weight:500;letter-spacing:.03em;color:${TXT};}
 .pgSub{font-size:10.5px;color:${MUT};margin-top:3px;font-weight:400;letter-spacing:.05em;}
-.track{flex:1;display:flex;min-height:0;touch-action:pan-y;will-change:transform;}
+.track{flex:1;display:flex;min-height:0;touch-action:pan-y;will-change:transform;user-select:none;}
 .page{flex:0 0 100%;min-width:0;height:100%;overflow:hidden;}
-.pageScroll{height:100%;overflow-y:auto;padding:0 16px;-webkit-overflow-scrolling:touch;}
+.pageScroll{height:100%;overflow-y:auto;padding:0 16px;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;}
 .pageCopyRow{display:flex;justify-content:flex-end;padding:4px 0 2px;}
 .dots{display:flex;gap:7px;justify-content:center;align-items:center;padding:12px 0 16px;flex-wrap:wrap;}
-.dot{width:6px;height:6px;border-radius:50%;background:${LINE};}
+.dot{width:6px;height:6px;border:0;padding:0;border-radius:50%;background:${LINE};transition:transform .2s ease,background-color .2s ease;}
 .dot.on{background:${INK};transform:scale(1.25);}
 .dotCount{font-size:11px;color:${SUB};font-weight:700;}
 
 /* fab */
 .fab{position:fixed;right:max(20px,calc(50vw - 300px + 20px));bottom:26px;width:58px;height:58px;border-radius:50%;
   background:${BL};color:#fff;border:none;display:grid;place-items:center;z-index:20;
-  box-shadow:0 8px 24px rgba(29,155,240,.3);}
-.fab:active{transform:scale(.94);}
+  box-shadow:0 8px 24px rgba(29,155,240,.3);transition:transform .16s ease,box-shadow .16s ease;}
+.fab:active{transform:scale(.88);box-shadow:0 3px 12px rgba(29,155,240,.24);}
+.fab:disabled{cursor:wait;opacity:.48;box-shadow:none;}
 
 /* composer */
 .compose{background:#fff;}
@@ -1863,12 +2110,19 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 
 /* overlay/sheet */
 .overlay{position:fixed;inset:0;z-index:60;background:rgba(20,20,24,.32);backdrop-filter:blur(3px);
-  display:flex;align-items:flex-end;justify-content:center;animation:fade .2s ease;}
+  display:flex;align-items:flex-end;justify-content:center;animation:fade .2s ease;transition:opacity .22s ease;}
 @keyframes fade{from{opacity:0;}}
 .sheet{width:100%;max-width:600px;background:${PAPER};border-radius:26px 26px 0 0;padding-top:12px;
   animation:up .26s cubic-bezier(.2,.9,.3,1);max-height:90vh;overflow-y:auto;}
 @keyframes up{from{transform:translateY(100%);}}
 .grab{width:40px;height:4px;border-radius:2px;background:${FAINT};margin:0 auto 16px;}
+.swipeOverlay.closing{opacity:0;}
+.swipeSheet{padding-top:0;will-change:transform;transition:transform .26s cubic-bezier(.22,.8,.25,1);overscroll-behavior-y:contain;}
+.swipeSheet.closing{transition-duration:.22s;transition-timing-function:cubic-bezier(.4,0,1,1);}
+.sheetDragZone{height:30px;display:flex;align-items:flex-start;touch-action:none;cursor:grab;}
+.sheetDragZone:active{cursor:grabbing;}
+.sheetDragZone .grab{margin:9px auto 0;transition:width .18s ease,background-color .18s ease;}
+.sheetDragZone:active .grab{width:52px;background:${MUT};}
 .sheetTitle{font-size:18px;font-weight:800;text-align:center;margin-bottom:18px;letter-spacing:.06em;}
 .sheetBody{padding:0 22px 34px;}
 .iconPick{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:22px;}
@@ -1887,30 +2141,45 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .primary:disabled{opacity:.35;}
 .deleteLink{display:block;width:100%;background:none;border:none;color:${RED};font-size:13px;padding:18px 0 4px;}
 
-@media (prefers-reduced-motion: reduce){*{animation:none!important;}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important;}}
 
 /* ===== wide / tablet-landscape layout ===== */
 .root{position:relative;display:flex;justify-content:center;align-items:flex-start;}
-.mainCol{width:100%;min-width:0;}
+.mainCol{width:100%;min-width:0;overflow-x:clip;isolation:isolate;}
+.routeStage{position:relative;width:100%;min-height:100dvh;background:#fff;touch-action:pan-y;}
+.routeStage.routeDragging{z-index:25;animation:none!important;box-shadow:-18px 0 38px rgba(15,20,25,.18);will-change:transform;}
+.routeStage.routeSettling{transition:transform .2s cubic-bezier(.22,.75,.25,1);}
+.edgeBackCue{position:absolute;z-index:90;left:-42px;top:calc(50vh - 21px);width:42px;height:42px;border-radius:50%;display:grid;place-items:center;
+  color:${TXT};background:#fff;box-shadow:0 4px 18px rgba(15,20,25,.16);opacity:var(--route-progress);transform:scale(.9);pointer-events:none;}
+.motion-forward{animation:routeForward .26s cubic-bezier(.2,.78,.24,1);}
+.motion-back{animation:routeBack .24s cubic-bezier(.2,.78,.24,1);}
+.motion-tab{animation:routeTab .18s ease-out;}
+@keyframes routeForward{from{opacity:.72;transform:translate3d(42px,0,0);}to{opacity:1;transform:none;}}
+@keyframes routeBack{from{opacity:.76;transform:translate3d(-24px,0,0);}to{opacity:1;transform:none;}}
+@keyframes routeTab{from{opacity:.55;transform:scale(.992);}to{opacity:1;transform:none;}}
 .leftNav{display:none;}
 .sidebar{display:none;}
 .mobileNav{position:fixed;z-index:30;left:0;right:0;bottom:0;height:calc(58px + env(safe-area-inset-bottom));padding:0 18px env(safe-area-inset-bottom);
   display:flex;align-items:center;justify-content:space-around;background:rgba(255,255,255,.96);backdrop-filter:blur(14px);border-top:1px solid ${LINE};}
 .mobileNav button{width:54px;height:54px;display:grid;place-items:center;border:none;background:none;color:${TXT};border-radius:50%;}
-.mobileNav button.on svg{fill:${TXT};stroke-width:1.9;}
+.mobileNav button{position:relative;transition:transform .14s ease,background-color .16s ease;}
+.mobileNav button:active{transform:scale(.78);background:#EFF3F4;}
+.mobileNav button.on svg{fill:${TXT};stroke-width:1.9;animation:navPop .22s cubic-bezier(.2,1.35,.35,1);}
+.mobileNav button.on:after{content:"";position:absolute;bottom:3px;width:4px;height:4px;border-radius:50%;background:${BL};}
+@keyframes navPop{from{transform:scale(.7);}to{transform:scale(1);}}
 @media (max-width:899px){
   .root,.mainCol,.screen{width:100%;max-width:100%;min-width:0;margin:0;padding-left:0;padding-right:0;}
   .screen{padding-bottom:calc(58px + env(safe-area-inset-bottom));}
   .compose.screen{padding-bottom:0;}
   .fab{bottom:calc(76px + env(safe-area-inset-bottom));right:18px;}
   .syncPill{bottom:calc(68px + env(safe-area-inset-bottom));}
+  .accountEditSheet{height:calc(100vh - 8px);max-height:calc(100vh - 8px);height:calc(100dvh - max(8px,env(safe-area-inset-top)));max-height:calc(100dvh - max(8px,env(safe-area-inset-top)));scroll-padding:64px 0 160px;}
+  .accountEditSheet .sheetBody{padding-bottom:max(34px,calc(20px + env(safe-area-inset-bottom)));}
 }
 @media (min-width:900px){
   .mobileNav{display:none;}
   .leftNav{display:block;flex:0 0 88px;width:88px;align-self:stretch;min-height:100vh;}
   .leftNavInner{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;align-items:center;padding:8px 10px 12px;}
-  .brandMark{width:52px;height:52px;border:none;background:none;border-radius:50%;display:grid;place-items:center;margin-bottom:3px;}
-  .brandMark:hover{background:#EFF3F4;}
   .navLinks{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;}
   .navButton{width:54px;height:54px;border:none;background:none;border-radius:50%;display:flex;align-items:center;justify-content:center;color:${TXT};}
   .navButton:hover{background:#EFF3F4;}
@@ -1937,7 +2206,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 @media (min-width:1320px){
   .leftNav{flex-basis:260px;width:260px;}
   .leftNavInner{align-items:stretch;padding-left:18px;padding-right:18px;}
-  .brandMark{margin-left:0;}
   .navLinks{align-items:stretch;gap:4px;}
   .navButton{width:max-content;max-width:100%;height:52px;padding:0 18px;gap:20px;border-radius:999px;justify-content:flex-start;font-size:20px;font-weight:400;}
   .navButton.on{font-weight:700;}
@@ -1977,6 +2245,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .googleBtn:disabled,.guestBtn:disabled,.miniToggle:disabled{cursor:wait;opacity:.6;}
 .loginNote{font-size:11.5px;color:${FAINT};line-height:1.8;margin-top:22px;}
 .syncPill{position:fixed;right:16px;bottom:16px;z-index:80;background:#18181B;color:#fff;border-radius:999px;padding:8px 12px;font-size:11px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.16);}
+.syncPill.warn{background:#8A4B08;}
+.navCompose:disabled{cursor:wait;opacity:.5;box-shadow:none;}
 .syncError{width:min(420px,calc(100% - 40px));margin:20vh auto 0;background:#fff;border:1px solid ${LINE};border-radius:20px;padding:26px;box-shadow:0 10px 30px rgba(0,0,0,.08);}
 .syncErrorTitle{font-size:18px;font-weight:800;color:${INK};}
 .syncErrorText{font-size:13px;line-height:1.8;color:${MUT};margin:10px 0 22px;}
@@ -2007,6 +2277,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .timelineTabs button:hover{background:rgba(15,20,25,.05);}
 .timelineTabs button.on{color:${TXT};font-weight:700;}
 .timelineTabs button.on span:after{content:"";position:absolute;height:4px;border-radius:999px;background:${BL};left:50%;right:auto;width:56px;bottom:0;transform:translateX(-50%);}
+.timelineContent{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;animation:timelineIn .2s cubic-bezier(.2,.8,.3,1);}
+@keyframes timelineIn{from{opacity:.45;transform:translate3d(10px,0,0);}to{opacity:1;transform:none;}}
 
 /* confirm dialog */
 .overlay.center{align-items:center;justify-content:center;padding:24px;}
@@ -2094,6 +2366,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .allPostsBtn:active,.allPostsBtn.on{background:${INK};border-color:${INK};color:#fff;}
 .allPostsHead{display:flex;align-items:center;justify-content:space-between;padding:7px 2px 11px;color:${MUT};font-size:12px;letter-spacing:.04em;}
 .allPostsHead span:first-child{color:${INK};font-size:14px;font-weight:800;}
+.allPostsTools{display:flex;align-items:center;gap:10px;}
+.allPostsTools .dayCopy{letter-spacing:0;}
 .xTime.asLink{background:none;border:none;padding:0;color:${MUT};font-size:15px;font-weight:400;cursor:pointer;}
 .xTime.asLink:active{text-decoration:underline;color:${INK};}
 
