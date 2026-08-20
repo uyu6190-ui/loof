@@ -2146,8 +2146,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 /* ===== wide / tablet-landscape layout ===== */
 .root{position:relative;display:flex;justify-content:center;align-items:flex-start;}
 .mainCol{width:100%;min-width:0;overflow-x:clip;isolation:isolate;}
-.routeStage{position:relative;width:100%;min-height:100dvh;background:#fff;will-change:transform;touch-action:pan-y;}
-.routeStage.routeDragging{z-index:25;animation:none!important;box-shadow:-18px 0 38px rgba(15,20,25,.18);}
+.routeStage{position:relative;width:100%;min-height:100dvh;background:#fff;touch-action:pan-y;}
+.routeStage.routeDragging{z-index:25;animation:none!important;box-shadow:-18px 0 38px rgba(15,20,25,.18);will-change:transform;}
 .routeStage.routeSettling{transition:transform .2s cubic-bezier(.22,.75,.25,1);}
 .edgeBackCue{position:absolute;z-index:90;left:-42px;top:calc(50vh - 21px);width:42px;height:42px;border-radius:50%;display:grid;place-items:center;
   color:${TXT};background:#fff;box-shadow:0 4px 18px rgba(15,20,25,.16);opacity:var(--route-progress);transform:scale(.9);pointer-events:none;}
